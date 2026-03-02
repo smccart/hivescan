@@ -374,9 +374,9 @@ function selectAgent(name) {
   requestAnimationFrame(() => {
     const t = repo.terminals[name]
     if (!t) return
-    const savedY = t.term.buffer.active.viewportY
+    const atBottom = t.term.buffer.active.viewportY >= t.term.buffer.active.baseY
     t.fitAddon.fit()
-    t.term.scrollToLine(savedY)
+    if (atBottom) t.term.scrollToBottom()
   })
 }
 
@@ -405,7 +405,8 @@ function createTerminal(port, name) {
   const fitAddon = new FitAddon.FitAddon()
   term.loadAddon(fitAddon)
   term.open(div)
-  fitAddon.fit()
+  // Don't fit here — div is display:none until .active is added, so
+  // fit() would measure 0×0 and corrupt the terminal's internal dimensions.
 
   const wsRef = { current: null }
 
@@ -420,9 +421,9 @@ function createTerminal(port, name) {
     if (!div.classList.contains('active')) return
     clearTimeout(resizeTimer)
     resizeTimer = setTimeout(() => {
-      const savedY = term.buffer.active.viewportY
+      const atBottom = term.buffer.active.viewportY >= term.buffer.active.baseY
       fitAddon.fit()
-      term.scrollToLine(savedY)
+      if (atBottom) term.scrollToBottom()
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
       }
