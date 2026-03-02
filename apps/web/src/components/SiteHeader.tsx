@@ -1,5 +1,5 @@
 import { Link, NavLink } from 'react-router'
-import { Github } from 'lucide-react'
+import GitHubIcon from './GitHubIcon'
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   `text-sm transition-colors ${isActive ? 'text-white' : 'text-neutral-400 hover:text-white'}`
@@ -16,13 +16,13 @@ export default function SiteHeader() {
         <nav className="flex items-center gap-6">
           <NavLink to="/docs" className={linkClass}>Docs</NavLink>
           <a
-            href="https://github.com/seanmccart/hive"
+            href="https://github.com/smccart/hive"
             target="_blank"
             rel="noopener noreferrer"
             className="text-neutral-400 hover:text-white transition-colors"
             aria-label="GitHub"
           >
-            <Github size={18} />
+            <GitHubIcon size={18} />
           </a>
         </nav>
       </div>

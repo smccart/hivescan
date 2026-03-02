@@ -1,5 +1,6 @@
 import { Link } from 'react-router'
-import { Github, ArrowRight } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
+import GitHubIcon from '../components/GitHubIcon'
 
 export default function CTASection() {
   return (
@@ -22,12 +23,12 @@ export default function CTASection() {
           </Link>
 
           <a
-            href="https://github.com/seanmccart/hive"
+            href="https://github.com/smccart/hive"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium text-neutral-300 bg-neutral-900 border border-neutral-800 hover:border-neutral-700 transition-colors"
           >
-            <Github size={14} />
+            <GitHubIcon size={14} />
             View on GitHub
           </a>
         </div>

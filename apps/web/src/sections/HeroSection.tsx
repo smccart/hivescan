@@ -1,5 +1,6 @@
 import { Link } from 'react-router'
-import { ArrowRight, Github } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
+import GitHubIcon from '../components/GitHubIcon'
 
 export default function HeroSection() {
   return (
@@ -31,7 +32,7 @@ export default function HeroSection() {
 
         <p className="text-lg text-neutral-400 max-w-2xl mx-auto mb-10 leading-relaxed">
           Drop HiveAgents into any monorepo. Get a real-time web dashboard for managing multiple{' '}
-          <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer" className="text-neutral-300 hover:text-white underline underline-offset-2 transition-colors">
+          <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer" className="text-neutral-300 hover:text-white transition-colors">
             Claude Code
           </a>{' '}
           agents — terminals, status indicators, session persistence, and model switching.
@@ -52,12 +53,12 @@ export default function HeroSection() {
             </Link>
 
             <a
-              href="https://github.com/seanmccart/hive"
+              href="https://github.com/smccart/hive"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 text-sm text-neutral-400 hover:text-white transition-colors"
             >
-              <Github size={14} />
+              <GitHubIcon size={14} />
               GitHub
             </a>
           </div>

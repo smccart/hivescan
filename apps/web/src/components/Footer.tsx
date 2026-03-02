@@ -7,7 +7,7 @@ export default function Footer() {
         <span>HiveAgents — MIT License</span>
         <div className="flex items-center gap-6">
           <Link to="/docs" className="hover:text-neutral-300 transition-colors">Docs</Link>
-          <a href="https://github.com/seanmccart/hive" target="_blank" rel="noopener noreferrer" className="hover:text-neutral-300 transition-colors">GitHub</a>
+          <a href="https://github.com/smccart/hive" target="_blank" rel="noopener noreferrer" className="hover:text-neutral-300 transition-colors">GitHub</a>
           <a href="https://www.npmjs.com/package/hive-agents" target="_blank" rel="noopener noreferrer" className="hover:text-neutral-300 transition-colors">npm</a>
         </div>
       </div>
