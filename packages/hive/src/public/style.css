@@ -8,6 +8,10 @@
   --text:       #e4e4e7;
   --muted:      #52525b;
   --hover:      #1c1c1c;
+  --hover-border: #2e2e2e;
+  --focus-border: #3f3f46;
+  --modal-overlay: rgba(0, 0, 0, 0.6);
+  --modal-shadow:  rgba(0, 0, 0, 0.5);
 
   --green:      #4ade80;
   --blue:       #60a5fa;
@@ -16,6 +20,28 @@
   --red:        #f87171;
   --cyan:       #38bdf8;
   --pink:       #f472b6;
+}
+
+[data-theme="light"] {
+  --bg:           #f8f8fa;
+  --sidebar-bg:   #f0f0f3;
+  --border:       #d4d4d8;
+  --surface:      #e8e8ec;
+  --text:         #18181b;
+  --muted:        #71717a;
+  --hover:        #e4e4e7;
+  --hover-border: #c4c4c8;
+  --focus-border: #a1a1aa;
+  --modal-overlay: rgba(0, 0, 0, 0.3);
+  --modal-shadow:  rgba(0, 0, 0, 0.15);
+
+  --green:   #22c55e;
+  --blue:    #3b82f6;
+  --purple:  #a855f7;
+  --amber:   #f59e0b;
+  --red:     #ef4444;
+  --cyan:    #0ea5e9;
+  --pink:    #ec4899;
 }
 
 html, body {
@@ -210,7 +236,7 @@ html, body {
   height: 12px;
   border-radius: 50%;
   background: var(--amber);
-  color: #0a0a0a;
+  color: var(--bg);
   font-size: 8px;
   font-weight: 700;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -251,7 +277,7 @@ html, body {
   height: 14px;
   border-radius: 50%;
   background: var(--amber);
-  color: #0a0a0a;
+  color: var(--bg);
   font-size: 9px;
   font-weight: 700;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -281,7 +307,7 @@ html, body {
   text-overflow: ellipsis;
 }
 
-.agent-item.active .agent-label { color: #fff; font-weight: 500; }
+.agent-item.active .agent-label { color: var(--text); font-weight: 600; }
 
 .agent-meta {
   display: block;
@@ -335,8 +361,8 @@ html, body {
   outline: none;
 }
 
-#model-select:hover { border-color: #2e2e2e; }
-#model-select:focus { border-color: #3f3f46; }
+#model-select:hover { border-color: var(--hover-border); }
+#model-select:focus { border-color: var(--focus-border); }
 
 .footer-btn {
   display: flex;
@@ -354,7 +380,7 @@ html, body {
   transition: background 0.1s, border-color 0.1s;
 }
 
-.footer-btn:hover { background: var(--hover); border-color: #2e2e2e; }
+.footer-btn:hover { background: var(--hover); border-color: var(--hover-border); }
 .footer-btn--danger { color: var(--red); }
 .footer-btn--danger:hover { border-color: var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); }
 
@@ -565,7 +591,7 @@ html, body {
 
 .preview-port-tab:hover {
   color: var(--text);
-  border-color: #2e2e2e;
+  border-color: var(--hover-border);
 }
 
 .preview-port-tab.active {
@@ -659,7 +685,7 @@ html, body {
   position: fixed;
   inset: 0;
   z-index: 1000;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--modal-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -674,7 +700,7 @@ html, body {
   max-height: 80vh;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 8px 32px var(--modal-shadow);
 }
 
 .modal-header {
@@ -763,8 +789,8 @@ html, body {
   width: 100%;
 }
 
-.perm-select:hover { border-color: #2e2e2e; }
-.perm-select:focus { border-color: #3f3f46; }
+.perm-select:hover { border-color: var(--hover-border); }
+.perm-select:focus { border-color: var(--focus-border); }
 
 .perm-add-btn {
   background: none;
@@ -807,8 +833,8 @@ html, body {
   transition: border-color 0.1s;
 }
 
-.perm-rule-input:hover { border-color: #2e2e2e; }
-.perm-rule-input:focus { border-color: #3f3f46; }
+.perm-rule-input:hover { border-color: var(--hover-border); }
+.perm-rule-input:focus { border-color: var(--focus-border); }
 .perm-rule-input::placeholder { color: var(--muted); opacity: 0.5; }
 
 .perm-rule-remove {
@@ -898,7 +924,7 @@ kbd {
   background: var(--sidebar-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 12px var(--modal-shadow);
 }
 
 .search-input {
@@ -912,7 +938,7 @@ kbd {
   width: 200px;
   outline: none;
 }
-.search-input:focus { border-color: #3f3f46; }
+.search-input:focus { border-color: var(--focus-border); }
 .search-input::placeholder { color: var(--muted); opacity: 0.5; }
 
 .search-btn {
@@ -931,3 +957,32 @@ kbd {
 }
 .search-btn:hover { color: var(--text); background: var(--hover); border-color: var(--border); }
 .search-close:hover { color: var(--red); }
+
+/* ── Theme toggle ── */
+
+#btn-theme {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+
+#btn-theme:hover {
+  color: var(--text);
+  border-color: var(--hover-border);
+  background: var(--hover);
+}
+
+/* ── Theme transition ── */
+
+html, #sidebar, #main, #agent-header, .modal-panel, .search-bar {
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}

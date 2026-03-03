@@ -1,17 +1,42 @@
-const TERM_THEME = {
-  background:          '#0a0a0a',
-  foreground:          '#e4e4e7',
-  cursor:              '#e4e4e7',
-  cursorAccent:        '#0a0a0a',
-  selectionBackground: '#3f3f46',
-  black:    '#18181b', brightBlack:   '#52525b',
-  red:      '#f87171', brightRed:     '#fca5a5',
-  green:    '#4ade80', brightGreen:   '#86efac',
-  yellow:   '#facc15', brightYellow:  '#fde047',
-  blue:     '#60a5fa', brightBlue:    '#93c5fd',
-  magenta:  '#c084fc', brightMagenta: '#d8b4fe',
-  cyan:     '#34d399', brightCyan:    '#6ee7b7',
-  white:    '#e4e4e7', brightWhite:   '#f4f4f5',
+const TERM_THEMES = {
+  dark: {
+    background:          '#0a0a0a',
+    foreground:          '#e4e4e7',
+    cursor:              '#e4e4e7',
+    cursorAccent:        '#0a0a0a',
+    selectionBackground: '#3f3f46',
+    black:    '#18181b', brightBlack:   '#52525b',
+    red:      '#f87171', brightRed:     '#fca5a5',
+    green:    '#4ade80', brightGreen:   '#86efac',
+    yellow:   '#facc15', brightYellow:  '#fde047',
+    blue:     '#60a5fa', brightBlue:    '#93c5fd',
+    magenta:  '#c084fc', brightMagenta: '#d8b4fe',
+    cyan:     '#34d399', brightCyan:    '#6ee7b7',
+    white:    '#e4e4e7', brightWhite:   '#f4f4f5',
+  },
+  light: {
+    background:          '#f8f8fa',
+    foreground:          '#18181b',
+    cursor:              '#18181b',
+    cursorAccent:        '#f8f8fa',
+    selectionBackground: '#bfdbfe',
+    black:    '#18181b', brightBlack:   '#3f3f46',
+    red:      '#dc2626', brightRed:     '#ef4444',
+    green:    '#16a34a', brightGreen:   '#22c55e',
+    yellow:   '#ca8a04', brightYellow:  '#eab308',
+    blue:     '#2563eb', brightBlue:    '#3b82f6',
+    magenta:  '#9333ea', brightMagenta: '#a855f7',
+    cyan:     '#0891b2', brightCyan:    '#06b6d4',
+    white:    '#e4e4e7', brightWhite:   '#f4f4f5',
+  },
+}
+
+function getCurrentTheme() {
+  return document.documentElement.getAttribute('data-theme') || 'dark'
+}
+
+function getTermTheme() {
+  return TERM_THEMES[getCurrentTheme()]
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -112,6 +137,51 @@ const permDenyList       = document.getElementById('perm-deny-list')
 const permAddAllow       = document.getElementById('perm-add-allow')
 const permAddDeny        = document.getElementById('perm-add-deny')
 const permSave           = document.getElementById('perm-save')
+
+// ── Theme toggle ─────────────────────────────────────────────────────────────
+
+const btnTheme = document.getElementById('btn-theme')
+const themeIcon = document.getElementById('theme-icon')
+
+const SUN_ICON = '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>'
+const MOON_ICON = '<path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>'
+
+function syncThemeIcon() {
+  const theme = getCurrentTheme()
+  themeIcon.innerHTML = theme === 'dark' ? SUN_ICON : MOON_ICON
+  btnTheme.title = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme)
+  localStorage.setItem('hive-theme', theme)
+  syncThemeIcon()
+  updateAllTerminalThemes()
+}
+
+function toggleTheme() {
+  applyTheme(getCurrentTheme() === 'dark' ? 'light' : 'dark')
+}
+
+function updateAllTerminalThemes() {
+  const termTheme = getTermTheme()
+  for (const id of projectOrder) {
+    const p = projects[id]
+    if (p?.terminal?.term) {
+      p.terminal.term.options.theme = termTheme
+    }
+  }
+}
+
+btnTheme.addEventListener('click', toggleTheme)
+
+window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+  if (!localStorage.getItem('hive-theme')) {
+    applyTheme(e.matches ? 'light' : 'dark')
+  }
+})
+
+syncThemeIcon()
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
@@ -463,7 +533,7 @@ function createTerminal(id) {
   termContainer.appendChild(div)
 
   const term = new Terminal({
-    theme: TERM_THEME,
+    theme: getTermTheme(),
     fontFamily: 'JetBrains Mono, Menlo, Monaco, Consolas, "Courier New", monospace',
     fontSize: 13,
     lineHeight: 1.4,
@@ -981,6 +1051,11 @@ document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
     e.preventDefault()
     openSearchBar()
+    return
+  }
+
+  if (e.key === 'T' && e.shiftKey && !e.target.closest('input, textarea, select, .xterm')) {
+    toggleTheme()
     return
   }
 
