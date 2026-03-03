@@ -416,3 +416,11 @@ html, body {
 .xterm { height: 100%; }
 .xterm-viewport { border-radius: 0; }
 .xterm-screen { outline: none; }
+
+.terminal-instance.stopped .xterm {
+  opacity: 0.35;
+  filter: saturate(0.15);
+  transition: opacity 0.25s, filter 0.25s;
+}
+
+.terminal-instance.stopped .xterm-cursor-layer { display: none; }

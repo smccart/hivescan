@@ -28,7 +28,7 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
 
 export default function DocsLayout() {
   return (
-    <div className="max-w-6xl mx-auto px-6 py-12 flex gap-12">
+    <div className="max-w-6xl mx-auto px-6 pt-20 pb-12 flex gap-12">
       {/* Sidebar */}
       <aside className="w-52 flex-shrink-0 sticky top-20 self-start">
         {NAV.map((section) => (

@@ -139,8 +139,8 @@ export function startServer(config, repoRoot) {
     const { dir } = AGENT_CONFIG[name]
     const pty = spawn(CLAUDE_BIN, ['--model', currentModel], {
       name: 'xterm-256color',
-      cols: 220,
-      rows: 50,
+      cols: 80,
+      rows: 24,
       cwd: dir,
       env: buildSpawnEnv(),
     })

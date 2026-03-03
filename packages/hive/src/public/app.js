@@ -329,6 +329,9 @@ function updateSidebarItem(port, name) {
     dot.classList.toggle('thinking', running && active)
   }
   if (status) status.classList.toggle('running', running)
+
+  const t = repo.terminals[name]
+  if (t) t.div.classList.toggle('stopped', !running)
 }
 
 // ── Select / switch agent ─────────────────────────────────────────────────────
@@ -387,7 +390,7 @@ function createTerminal(port, name) {
   if (!repo) return
 
   const div = document.createElement('div')
-  div.className = 'terminal-instance'
+  div.className = 'terminal-instance active'
   div.dataset.repo = port
   termContainer.appendChild(div)
 
@@ -405,8 +408,7 @@ function createTerminal(port, name) {
   const fitAddon = new FitAddon.FitAddon()
   term.loadAddon(fitAddon)
   term.open(div)
-  // Don't fit here — div is display:none until .active is added, so
-  // fit() would measure 0×0 and corrupt the terminal's internal dimensions.
+  fitAddon.fit()
 
   const wsRef = { current: null }
 
@@ -432,6 +434,7 @@ function createTerminal(port, name) {
   resizeObserver.observe(termContainer)
 
   repo.terminals[name] = { term, fitAddon, div, ws: wsRef, resizeObserver }
+  if (!repo.agentStatus[name]) div.classList.add('stopped')
   connectWS(port, name, term, wsRef)
 }
 
@@ -473,6 +476,10 @@ function connectWS(port, name, term, wsRef, skipBuffer = false) {
         }
       }
     } catch { /* ignore */ }
+  })
+
+  ws.addEventListener('open', () => {
+    ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
   })
 
   ws.addEventListener('close', () => {

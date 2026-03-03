@@ -20,7 +20,7 @@ export default function DocsIndexPage() {
           <Link
             key={p.to}
             to={p.to}
-            className="flex items-center justify-between p-4 rounded-lg border border-neutral-800 bg-neutral-900/30 hover:border-neutral-700 transition-colors group"
+            className="flex items-center justify-between p-4 rounded-lg border border-neutral-800 bg-neutral-900/30 hover:border-neutral-700 transition-colors group no-underline"
           >
             <div>
               <div className="font-medium text-white group-hover:text-brand transition-colors">{p.title}</div>
