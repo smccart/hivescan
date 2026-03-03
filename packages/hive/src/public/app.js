@@ -67,6 +67,15 @@ const btnStartAll    = document.getElementById('btn-start-all')
 const btnStopAll     = document.getElementById('btn-stop-all')
 const modelSelect    = document.getElementById('model-select')
 const repoTabsEl     = document.getElementById('repo-tabs')
+const btnPermissions     = document.getElementById('btn-permissions')
+const permissionsModal   = document.getElementById('permissions-modal')
+const permissionsClose   = document.getElementById('permissions-close')
+const permModeSelect     = document.getElementById('perm-mode')
+const permAllowList      = document.getElementById('perm-allow-list')
+const permDenyList       = document.getElementById('perm-deny-list')
+const permAddAllow       = document.getElementById('perm-add-allow')
+const permAddDeny        = document.getElementById('perm-add-deny')
+const permSave           = document.getElementById('perm-save')
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
@@ -544,8 +553,134 @@ btnStopAll.addEventListener('click', async () => {
   updateHeaderButtons()
 })
 
+// ── Permissions modal ─────────────────────────────────────────────────────────
+
+let permDraft = { defaultMode: 'default', permissions: { allow: [], deny: [] } }
+
+async function loadPermissions() {
+  const repo = repoState[activeRepo]
+  if (!repo) return
+  try {
+    const res = await fetch(`${repo.baseUrl}/api/permissions`)
+    const data = await res.json()
+    permDraft = {
+      defaultMode: data.defaultMode ?? 'default',
+      permissions: {
+        allow: [...(data.permissions?.allow ?? [])],
+        deny:  [...(data.permissions?.deny ?? [])],
+      }
+    }
+  } catch {
+    permDraft = { defaultMode: 'default', permissions: { allow: [], deny: [] } }
+  }
+}
+
+function renderPermRule(rule) {
+  const item = document.createElement('div')
+  item.className = 'perm-rule-item'
+
+  const input = document.createElement('input')
+  input.type = 'text'
+  input.className = 'perm-rule-input'
+  input.value = rule
+  input.placeholder = 'e.g. Bash(git diff *)'
+
+  const removeBtn = document.createElement('button')
+  removeBtn.className = 'perm-rule-remove'
+  removeBtn.title = 'Remove rule'
+  removeBtn.textContent = '\u00d7'
+  removeBtn.addEventListener('click', () => item.remove())
+
+  item.appendChild(input)
+  item.appendChild(removeBtn)
+  return item
+}
+
+function renderPermissions() {
+  permModeSelect.value = permDraft.defaultMode
+
+  permAllowList.innerHTML = ''
+  for (const rule of permDraft.permissions.allow) {
+    permAllowList.appendChild(renderPermRule(rule))
+  }
+
+  permDenyList.innerHTML = ''
+  for (const rule of permDraft.permissions.deny) {
+    permDenyList.appendChild(renderPermRule(rule))
+  }
+}
+
+function syncDraftFromDOM() {
+  permDraft.defaultMode = permModeSelect.value
+  permDraft.permissions.allow = []
+  permAllowList.querySelectorAll('.perm-rule-input').forEach(input => {
+    const val = input.value.trim()
+    if (val) permDraft.permissions.allow.push(val)
+  })
+  permDraft.permissions.deny = []
+  permDenyList.querySelectorAll('.perm-rule-input').forEach(input => {
+    const val = input.value.trim()
+    if (val) permDraft.permissions.deny.push(val)
+  })
+}
+
+async function savePermissions() {
+  const repo = repoState[activeRepo]
+  if (!repo) return
+  syncDraftFromDOM()
+  try {
+    const res = await fetch(`${repo.baseUrl}/api/permissions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(permDraft),
+    })
+    const data = await res.json()
+    if (data.ok) {
+      closePermissionsModal()
+    } else {
+      window.alert('Failed to save: ' + (data.error ?? 'Unknown error'))
+    }
+  } catch (err) {
+    window.alert('Failed to save permissions: ' + err.message)
+  }
+}
+
+async function openPermissionsModal() {
+  await loadPermissions()
+  renderPermissions()
+  permissionsModal.style.display = ''
+}
+
+function closePermissionsModal() {
+  permissionsModal.style.display = 'none'
+}
+
+btnPermissions.addEventListener('click', openPermissionsModal)
+permissionsClose.addEventListener('click', closePermissionsModal)
+permSave.addEventListener('click', savePermissions)
+
+permAddAllow.addEventListener('click', () => {
+  permAllowList.appendChild(renderPermRule(''))
+  const inputs = permAllowList.querySelectorAll('.perm-rule-input')
+  inputs[inputs.length - 1].focus()
+})
+
+permAddDeny.addEventListener('click', () => {
+  permDenyList.appendChild(renderPermRule(''))
+  const inputs = permDenyList.querySelectorAll('.perm-rule-input')
+  inputs[inputs.length - 1].focus()
+})
+
+permissionsModal.addEventListener('click', (e) => {
+  if (e.target === permissionsModal) closePermissionsModal()
+})
+
 // ── Keyboard shortcuts: Alt+1–9 ───────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && permissionsModal.style.display !== 'none') {
+    closePermissionsModal()
+    return
+  }
   if (e.altKey && !e.ctrlKey && !e.metaKey) {
     const repo = repoState[activeRepo]
     if (!repo) return

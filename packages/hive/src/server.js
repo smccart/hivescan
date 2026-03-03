@@ -252,6 +252,34 @@ export function startServer(config, repoRoot) {
     res.json({ ok: true })
   })
 
+  // ── Permissions (.claude/settings.json) ────────────────────────────────────
+
+  app.get('/api/permissions', (_req, res) => {
+    const settingsPath = join(repoRoot, '.claude', 'settings.json')
+    try {
+      const raw = readFileSync(settingsPath, 'utf8')
+      res.json(JSON.parse(raw))
+    } catch {
+      res.json({ defaultMode: 'default', permissions: { allow: [], deny: [] } })
+    }
+  })
+
+  app.post('/api/permissions', (req, res) => {
+    const settingsDir = join(repoRoot, '.claude')
+    const settingsPath = join(settingsDir, 'settings.json')
+    try {
+      const { defaultMode, permissions } = req.body
+      if (!defaultMode || !permissions) {
+        return res.status(400).json({ error: 'Invalid payload' })
+      }
+      mkdirSync(settingsDir, { recursive: true })
+      writeFileSync(settingsPath, JSON.stringify({ defaultMode, permissions }, null, 2) + '\n', 'utf8')
+      res.json({ ok: true })
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  })
+
   // ── HTTP + WebSocket server ──────────────────────────────────────────────────
 
   const server = createServer(app)
