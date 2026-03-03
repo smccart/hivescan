@@ -57,6 +57,12 @@ let previewOpen = false
 let previewPort = null
 let splitWidth = null
 
+// Sidebar section state (persisted)
+let collapsedGroups = new Set(JSON.parse(localStorage.getItem('hive:collapsed') || '[]'))
+let hiddenProjects = new Set(JSON.parse(localStorage.getItem('hive:hidden') || '[]'))
+function saveCollapsed() { localStorage.setItem('hive:collapsed', JSON.stringify([...collapsedGroups])) }
+function saveHidden() { localStorage.setItem('hive:hidden', JSON.stringify([...hiddenProjects])) }
+
 // ── Notifications ────────────────────────────────────────────────────────────
 
 function requestNotificationPermission() {
@@ -429,7 +435,6 @@ function renderSidebar() {
       }
       groups.get(p.groupId).children.push(p)
     } else if (!groups.has(id)) {
-      // Could be a group parent or standalone
       const hasChildren = projectOrder.some(oid => projects[oid]?.groupId === id)
       if (hasChildren) {
         if (!groups.has(id)) groups.set(id, { parent: p, children: [] })
@@ -439,43 +444,112 @@ function renderSidebar() {
     }
   }
 
-  // Render groups first, then standalone
-  for (const [, { parent, children }] of groups) {
-    // Group header
-    const header = document.createElement('div')
-    header.className = 'group-header'
-    if (parent) {
-      header.dataset.id = parent.id
-      header.style.setProperty('--agent-color', parent.color)
-
-      const chevron = document.createElement('span')
-      chevron.className = 'group-chevron'
-      chevron.innerHTML = '&#x25BE;'
-
-      const name = document.createElement('span')
-      name.className = 'group-name'
-      name.textContent = parent.name
-
-      header.append(chevron, name)
-      header.addEventListener('click', () => selectProject(parent.id))
+  // Separate visible vs hidden
+  const visibleGroups = []
+  const hiddenGroupsList = []
+  for (const [groupId, group] of groups) {
+    if (group.parent && hiddenProjects.has(group.parent.id)) {
+      hiddenGroupsList.push(group)
+    } else {
+      visibleGroups.push(group)
     }
-    agentListEl.appendChild(header)
+  }
+  const visibleStandalone = standalone.filter(p => !hiddenProjects.has(p.id))
+  const hiddenStandalone = standalone.filter(p => hiddenProjects.has(p.id))
 
-    // Children
-    for (const child of children) {
-      agentListEl.appendChild(buildProjectItem(child, true))
+  // Render visible groups
+  for (const { parent, children } of visibleGroups) {
+    agentListEl.appendChild(buildGroupHeader(parent, children))
+    if (parent && !collapsedGroups.has(parent.id)) {
+      for (const child of children) {
+        agentListEl.appendChild(buildProjectItem(child, true, false))
+      }
     }
   }
 
-  // Standalone projects
-  for (const p of standalone) {
-    agentListEl.appendChild(buildProjectItem(p, false))
+  // Render visible standalone
+  for (const p of visibleStandalone) {
+    agentListEl.appendChild(buildProjectItem(p, false, false))
+  }
+
+  // Render hidden section
+  if (hiddenGroupsList.length > 0 || hiddenStandalone.length > 0) {
+    const label = document.createElement('div')
+    label.className = 'hidden-section-label'
+    label.textContent = 'Hidden'
+    agentListEl.appendChild(label)
+
+    for (const { parent, children } of hiddenGroupsList) {
+      agentListEl.appendChild(buildGroupHeader(parent, children, true))
+      if (parent && !collapsedGroups.has(parent.id)) {
+        for (const child of children) {
+          agentListEl.appendChild(buildProjectItem(child, true, true))
+        }
+      }
+    }
+    for (const p of hiddenStandalone) {
+      agentListEl.appendChild(buildProjectItem(p, false, true))
+    }
   }
 }
 
-function buildProjectItem(p, isChild) {
+function buildGroupHeader(parent, children, isHidden) {
+  const header = document.createElement('div')
+  header.className = 'group-header' + (isHidden ? ' hidden-item' : '')
+  if (parent) {
+    const isCollapsed = collapsedGroups.has(parent.id)
+    if (isCollapsed) header.classList.add('collapsed')
+    header.dataset.id = parent.id
+    header.style.setProperty('--agent-color', parent.color)
+
+    const chevron = document.createElement('span')
+    chevron.className = 'group-chevron'
+    chevron.innerHTML = '&#x25BE;'
+    chevron.addEventListener('click', (e) => {
+      e.stopPropagation()
+      if (collapsedGroups.has(parent.id)) {
+        collapsedGroups.delete(parent.id)
+      } else {
+        collapsedGroups.add(parent.id)
+      }
+      saveCollapsed()
+      renderSidebar()
+    })
+
+    const name = document.createElement('span')
+    name.className = 'group-name'
+    name.textContent = parent.name
+
+    const eye = buildVisibilityToggle(parent.id, true)
+
+    header.append(chevron, name, eye)
+    header.addEventListener('click', () => selectProject(parent.id))
+  }
+  return header
+}
+
+function buildVisibilityToggle(id, isGroup) {
+  const eye = document.createElement('span')
+  eye.className = 'visibility-toggle'
+  const isHidden = hiddenProjects.has(id)
+  eye.innerHTML = isHidden ? '&#x2298;' : '&#x25C9;'
+  eye.title = isHidden ? 'Show' : 'Hide'
+  eye.addEventListener('click', (e) => {
+    e.stopPropagation()
+    if (hiddenProjects.has(id)) {
+      hiddenProjects.delete(id)
+    } else {
+      hiddenProjects.add(id)
+    }
+    saveHidden()
+    renderSidebar()
+  })
+  return eye
+}
+
+function buildProjectItem(p, isChild, isHidden) {
   const item = document.createElement('div')
-  item.className = 'agent-item' + (p.id === activeProject ? ' active' : '') + (isChild ? ' child' : '')
+  item.className = 'agent-item' + (p.id === activeProject ? ' active' : '') + (isChild ? ' child' : '') + (isHidden ? ' hidden-item' : '')
   item.dataset.id = p.id
   item.style.setProperty('--agent-color', p.color)
 
@@ -499,7 +573,12 @@ function buildProjectItem(p, isChild) {
   const status = document.createElement('span')
   status.className = 'agent-status' + (p.running ? ' running' : '')
 
-  item.append(dot, info, status)
+  if (!isChild) {
+    const eye = buildVisibilityToggle(p.id, false)
+    item.append(dot, info, status, eye)
+  } else {
+    item.append(dot, info, status)
+  }
   item.addEventListener('click', () => selectProject(p.id))
   return item
 }
