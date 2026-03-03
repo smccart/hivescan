@@ -3,9 +3,10 @@ import { WebSocketServer } from 'ws'
 import { spawn } from 'node-pty'
 import { createServer } from 'node:http'
 import { fileURLToPath } from 'node:url'
-import { dirname, join, resolve } from 'node:path'
-import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { execFileSync, exec } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs'
+import { ProjectWatcher } from './scanner.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -66,22 +67,24 @@ function detectWaiting(buffer) {
 
 // ── Buffer persistence ─────────────────────────────────────────────────────────
 
+const MAX_BUFFER_BYTES = 50_000
+
 function makeBufferHelpers(dataDir) {
   mkdirSync(dataDir, { recursive: true })
 
   return {
-    bufferPath: (name) => join(dataDir, `${name}.buf`),
-    loadBuffer: (name) => {
+    bufferPath: () => join(dataDir, 'agent.buf'),
+    loadBuffer: () => {
       try {
-        const data = readFileSync(join(dataDir, `${name}.buf`), 'utf8')
+        const data = readFileSync(join(dataDir, 'agent.buf'), 'utf8')
         return data ? [data] : []
       } catch { return [] }
     },
-    scheduleSave: (name, session) => {
+    scheduleSave: (session) => {
       clearTimeout(session.saveTimer)
       session.saveTimer = setTimeout(() => {
         const content = session.buffer.join('')
-        if (content) writeFileSync(join(dataDir, `${name}.buf`), content, 'utf8')
+        if (content) writeFileSync(join(dataDir, 'agent.buf'), content, 'utf8')
       }, 1000)
     },
   }
@@ -89,42 +92,79 @@ function makeBufferHelpers(dataDir) {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export function startServer(config, repoRoot) {
-  const port = config.port ?? 4199
-  const dataDir = join(repoRoot, '.hive')
-  const buf = makeBufferHelpers(dataDir)
+export function startServer({ port, pollInterval, scanDirs, dataDir }) {
+  const MODELS = [
+    { id: 'claude-opus-4-6',           label: 'Opus 4.6' },
+    { id: 'claude-sonnet-4-6',         label: 'Sonnet 4.6' },
+    { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+  ]
+  let currentModel = 'claude-sonnet-4-6'
 
-  // Build AGENT_CONFIG from user config, assigning colors from palette if not set
-  const AGENT_CONFIG = {}
-  const agentOrder = []
-  for (let i = 0; i < config.agents.length; i++) {
-    const a = config.agents[i]
-    const color = a.color ?? COLOR_PALETTE[i % COLOR_PALETTE.length]
-    const absDir = resolve(repoRoot, a.dir)
-    AGENT_CONFIG[a.name] = {
-      dir: absDir,
-      port: a.port ?? null,
-      label: a.label ?? a.name,
-      color,
+  // Project sessions: { [projectId]: session }
+  const sessions = {}
+  let colorIdx = 0
+
+  // Control WebSocket clients (for broadcasting project changes)
+  const controlClients = new Set()
+
+  function broadcastProjectsChanged() {
+    const msg = JSON.stringify({ type: 'projects:changed', projects: getProjectList() })
+    for (const ws of controlClients) {
+      if (ws.readyState === 1) ws.send(msg)
     }
-    agentOrder.push(a.name)
   }
 
-  // Per-agent session state
-  const sessions = {}
-  for (const name of agentOrder) {
-    sessions[name] = {
+  function getProjectList() {
+    return Object.values(sessions).map(s => ({
+      id: s.id,
+      name: s.name,
+      root: s.root,
+      ports: s.ports,
+      color: s.color,
+      group: s.group,
+      groupId: s.groupId,
+      running: !!s.pty,
+      active: s.active,
+      waiting: s.waiting,
+    }))
+  }
+
+  function projectDataDir(projectId) {
+    return join(dataDir, 'projects', projectId)
+  }
+
+  function addProject(project) {
+    if (sessions[project.id]) {
+      // Update ports if changed
+      sessions[project.id].ports = project.ports
+      return
+    }
+
+    const pDataDir = projectDataDir(project.id)
+    const buf = makeBufferHelpers(pDataDir)
+
+    sessions[project.id] = {
+      id: project.id,
+      name: project.name,
+      root: project.root,
+      ports: project.ports,
+      group: project.group ?? null,
+      groupId: project.groupId ?? null,
+      color: COLOR_PALETTE[colorIdx++ % COLOR_PALETTE.length],
       pty: null,
-      buffer: buf.loadBuffer(name),
+      buffer: buf.loadBuffer(),
+      buf,
       clients: new Set(),
       active: false,
       waiting: false,
       activityTimer: null,
       saveTimer: null,
     }
-  }
 
-  const MAX_BUFFER_BYTES = 50_000
+    const portInfo = project.ports.length > 0 ? ` (${project.ports.map(p => ':' + p).join(' ')})` : ''
+    console.log(`  + ${project.name}${portInfo}`)
+    broadcastProjectsChanged()
+  }
 
   function trimBuffer(session) {
     let total = session.buffer.reduce((n, s) => n + s.length, 0)
@@ -154,18 +194,24 @@ export function startServer(config, repoRoot) {
     return env
   }
 
-  function spawnAgent(name) {
-    const session = sessions[name]
-    if (session.pty) return
+  function spawnAgent(projectId) {
+    const session = sessions[projectId]
+    if (!session || session.pty) return
 
-    const { dir } = AGENT_CONFIG[name]
-    const pty = spawn(CLAUDE_BIN, ['--model', currentModel], {
-      name: 'xterm-256color',
-      cols: 80,
-      rows: 24,
-      cwd: dir,
-      env: buildSpawnEnv(),
-    })
+    let pty
+    try {
+      pty = spawn(CLAUDE_BIN, ['--model', currentModel], {
+        name: 'xterm-256color',
+        cols: 80,
+        rows: 24,
+        cwd: session.root,
+        env: buildSpawnEnv(),
+      })
+    } catch (err) {
+      console.error(`[${session.name}] failed to spawn: ${err.message}`)
+      broadcast(session, { type: 'status', running: false, error: err.message })
+      return
+    }
 
     session.pty = pty
     session.buffer = []
@@ -174,12 +220,13 @@ export function startServer(config, repoRoot) {
       session.buffer.push(data)
       trimBuffer(session)
       broadcast(session, { type: 'output', data })
-      buf.scheduleSave(name, session)
+      session.buf.scheduleSave(session)
 
       if (!session.active) {
         session.active = true
         session.waiting = false
         broadcast(session, { type: 'activity', active: true, waiting: false })
+        broadcastProjectsChanged()
       }
       clearTimeout(session.activityTimer)
       session.activityTimer = setTimeout(() => {
@@ -187,44 +234,67 @@ export function startServer(config, repoRoot) {
         const waiting = detectWaiting(session.buffer)
         session.waiting = waiting
         broadcast(session, { type: 'activity', active: false, waiting })
+        broadcastProjectsChanged()
       }, 1500)
     })
 
     pty.onExit(({ exitCode }) => {
       clearTimeout(session.activityTimer)
       session.active = false
+      session.waiting = false
       session.pty = null
       broadcast(session, { type: 'status', running: false, exitCode })
-      console.log(`[${name}] exited (code ${exitCode})`)
+      broadcastProjectsChanged()
+      console.log(`[${session.name}] exited (code ${exitCode})`)
     })
 
-    console.log(`[${name}] started`)
+    console.log(`[${session.name}] started`)
     broadcast(session, { type: 'status', running: true })
+    broadcastProjectsChanged()
   }
 
-  function killAgent(name) {
-    const session = sessions[name]
-    if (session.pty) {
+  function killAgent(projectId) {
+    const session = sessions[projectId]
+    if (session?.pty) {
       session.pty.kill()
       session.pty = null
+      broadcastProjectsChanged()
     }
   }
 
-  const MODELS = [
-    { id: 'claude-opus-4-6',           label: 'Opus 4.6' },
-    { id: 'claude-sonnet-4-6',         label: 'Sonnet 4.6' },
-    { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
-  ]
-  let currentModel = config.defaultModel ?? 'claude-opus-4-6'
+  // ── Project watcher (dirs + ports) ──────────────────────────────────────────
+
+  const watcher = new ProjectWatcher({ scanDirs, hivePort: port })
+
+  // Directory scan: load projects immediately on startup
+  const initialProjects = watcher.discoverFromDirs()
+  for (const project of initialProjects) addProject(project)
+
+  // Port scan: updates port info on known projects, may discover extras
+  watcher.on('projects:updated', (projectList) => {
+    for (const project of projectList) {
+      if (sessions[project.id]) {
+        const prev = sessions[project.id].ports
+        const changed =
+          prev.length !== project.ports.length ||
+          prev.some(p => !project.ports.includes(p))
+        if (changed) {
+          sessions[project.id].ports = project.ports
+        }
+      } else {
+        addProject(project)
+      }
+    }
+    broadcastProjectsChanged()
+  })
 
   // ── Express ─────────────────────────────────────────────────────────────────
 
   const app = express()
 
-  // CORS — allow cross-origin requests from other Hive instances (local dev tool)
   app.use((_req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
     if (_req.method === 'OPTIONS') return res.sendStatus(204)
     next()
@@ -234,36 +304,52 @@ export function startServer(config, repoRoot) {
   app.use(express.static(join(__dirname, 'public')))
 
   app.get('/api/info', (_req, res) => {
-    res.json({ label: config.label ?? repoRoot.split('/').pop(), port })
+    res.json({ mode: 'central', port, projectCount: Object.keys(sessions).length })
   })
 
-  app.get('/api/agents', (_req, res) => {
-    const result = {}
-    for (const name of agentOrder) {
-      const cfg = AGENT_CONFIG[name]
-      result[name] = {
-        ...cfg,
-        running: !!sessions[name].pty,
-        active: sessions[name].active,
-        waiting: sessions[name].waiting,
-      }
-    }
-    // Include order so the UI can sort correctly
-    res.json({ agents: result, order: agentOrder })
+  app.get('/api/projects', (_req, res) => {
+    res.json({ projects: getProjectList() })
   })
 
-  app.post('/api/agents/:name/start', (req, res) => {
-    const { name } = req.params
-    if (!AGENT_CONFIG[name]) return res.status(404).json({ error: 'Unknown agent' })
-    spawnAgent(name)
+  app.post('/api/projects/scan', async (_req, res) => {
+    await watcher.scan()
+    res.json({ projects: getProjectList() })
+  })
+
+  // Resolve project from :id param
+  function resolveProject(req, res) {
+    const { id } = req.params
+    if (!sessions[id]) { res.status(404).json({ error: 'Unknown project' }); return null }
+    return sessions[id]
+  }
+
+  app.post('/api/projects/:id/start', (req, res) => {
+    const session = resolveProject(req, res)
+    if (!session) return
+    spawnAgent(session.id)
     res.json({ ok: true })
   })
 
-  app.post('/api/agents/:name/stop', (req, res) => {
-    const { name } = req.params
-    if (!AGENT_CONFIG[name]) return res.status(404).json({ error: 'Unknown agent' })
-    killAgent(name)
+  app.post('/api/projects/:id/stop', (req, res) => {
+    const session = resolveProject(req, res)
+    if (!session) return
+    killAgent(session.id)
     res.json({ ok: true })
+  })
+
+  app.post('/api/projects/:id/restart', (req, res) => {
+    const session = resolveProject(req, res)
+    if (!session) return
+
+    killAgent(session.id)
+    session.buffer = []
+    clearTimeout(session.saveTimer)
+    try { unlinkSync(session.buf.bufferPath()) } catch { /* ok */ }
+
+    setTimeout(() => {
+      spawnAgent(session.id)
+      res.json({ ok: true })
+    }, 300)
   })
 
   app.get('/api/model', (_req, res) => {
@@ -274,14 +360,16 @@ export function startServer(config, repoRoot) {
     const { model } = req.body
     if (!MODELS.find(m => m.id === model)) return res.status(400).json({ error: 'Unknown model' })
     currentModel = model
-    console.log(`Model → ${model}`)
+    console.log(`Model -> ${model}`)
     res.json({ ok: true })
   })
 
-  // ── Permissions (.claude/settings.json) ────────────────────────────────────
+  // ── Permissions (project-scoped) ─────────────────────────────────────────
 
-  app.get('/api/permissions', (_req, res) => {
-    const settingsPath = join(repoRoot, '.claude', 'settings.json')
+  app.get('/api/projects/:id/permissions', (req, res) => {
+    const session = resolveProject(req, res)
+    if (!session) return
+    const settingsPath = join(session.root, '.claude', 'settings.json')
     try {
       const raw = readFileSync(settingsPath, 'utf8')
       res.json(JSON.parse(raw))
@@ -290,8 +378,10 @@ export function startServer(config, repoRoot) {
     }
   })
 
-  app.post('/api/permissions', (req, res) => {
-    const settingsDir = join(repoRoot, '.claude')
+  app.put('/api/projects/:id/permissions', (req, res) => {
+    const session = resolveProject(req, res)
+    if (!session) return
+    const settingsDir = join(session.root, '.claude')
     const settingsPath = join(settingsDir, 'settings.json')
     try {
       const { defaultMode, permissions } = req.body
@@ -309,19 +399,29 @@ export function startServer(config, repoRoot) {
   // ── HTTP + WebSocket server ──────────────────────────────────────────────────
 
   const server = createServer(app)
-  const wss = new WebSocketServer({ server, path: '/ws' })
+  const wss = new WebSocketServer({ server })
 
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url, 'http://localhost')
-    const name = url.searchParams.get('agent')
+    const path = url.pathname
 
-    if (!name || !AGENT_CONFIG[name]) {
-      ws.close(1008, 'Unknown agent')
+    // Control channel: /ws/control — receives project list updates
+    if (path === '/ws/control') {
+      controlClients.add(ws)
+      ws.send(JSON.stringify({ type: 'projects:changed', projects: getProjectList() }))
+      ws.on('close', () => controlClients.delete(ws))
+      return
+    }
+
+    // Terminal channel: /ws?project=<id>
+    const projectId = url.searchParams.get('project')
+    if (!projectId || !sessions[projectId]) {
+      ws.close(1008, 'Unknown project')
       return
     }
 
     const skipBuffer = url.searchParams.get('skipBuffer') === 'true'
-    const session = sessions[name]
+    const session = sessions[projectId]
     session.clients.add(ws)
 
     if (!skipBuffer && session.buffer.length > 0) {
@@ -338,6 +438,10 @@ export function startServer(config, repoRoot) {
           session.pty.write(msg.data)
         } else if (msg.type === 'resize' && session.pty) {
           session.pty.resize(Math.max(1, msg.cols), Math.max(1, msg.rows))
+        } else if (msg.type === 'clear') {
+          session.buffer = []
+          clearTimeout(session.saveTimer)
+          try { unlinkSync(session.buf.bufferPath()) } catch { /* ok */ }
         }
       } catch { /* ignore malformed */ }
     })
@@ -347,13 +451,37 @@ export function startServer(config, repoRoot) {
     })
   })
 
-  server.listen(port, () => {
-    console.log(`\n  Hive running at http://localhost:${port}\n`)
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n  Error: port ${port} is already in use.`)
+      console.error(`  Try a different port: hive --port ${port + 1}\n`)
+    } else {
+      console.error(`\n  Server error: ${err.message}\n`)
+    }
+    process.exit(1)
   })
 
-  process.on('SIGINT', () => {
-    console.log('\n  Shutting down Hive...')
-    for (const name of agentOrder) killAgent(name)
-    process.exit(0)
+  server.listen(port, () => {
+    const count = Object.keys(sessions).length
+    console.log(`\n  Hive running at http://localhost:${port}`)
+    console.log(`  ${count} project(s) found, scanning ports every ${pollInterval / 1000}s...\n`)
+    watcher.start(pollInterval)
+
+    // Open browser
+    const url = `http://localhost:${port}`
+    const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
+    exec(`${cmd} ${url}`)
   })
+
+  function shutdown() {
+    console.log('\n  Shutting down Hive...')
+    watcher.stop()
+    for (const session of Object.values(sessions)) {
+      if (session.pty) session.pty.kill()
+    }
+    process.exit(0)
+  }
+
+  process.on('SIGINT', shutdown)
+  process.on('SIGTERM', shutdown)
 }

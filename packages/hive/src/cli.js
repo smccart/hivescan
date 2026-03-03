@@ -1,76 +1,106 @@
 #!/usr/bin/env node
 
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, mkdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { homedir } from 'node:os'
 
-const CWD = process.cwd()
+// ── CLI flags ───────────────────────────────────────────────────────────────
 
-// ── Load config ──────────────────────────────────────────────────────────────
-
-async function loadConfig() {
-  // Try hive.config.js (ESM)
-  const jsConfig = join(CWD, 'hive.config.js')
-  if (existsSync(jsConfig)) {
-    const mod = await import(pathToFileURL(jsConfig).href)
-    return mod.default ?? mod
-  }
-
-  // Try hive.config.json
-  const jsonConfig = join(CWD, 'hive.config.json')
-  if (existsSync(jsonConfig)) {
-    const { readFileSync } = await import('node:fs')
-    return JSON.parse(readFileSync(jsonConfig, 'utf8'))
-  }
-
-  // Auto-discover: scan apps/* and packages/*
-  return autoDiscover()
-}
-
-function autoDiscover() {
-  const COLOR_PALETTE = [
-    '#4ade80', '#34d399', '#fb923c', '#60a5fa',
-    '#94a3b8', '#c084fc', '#818cf8', '#fbbf24',
-    '#f472b6', '#38bdf8', '#a3e635', '#f97316',
-  ]
-
-  const agents = []
-  let colorIdx = 0
-
-  for (const base of ['apps', 'packages']) {
-    const dir = join(CWD, base)
-    if (!existsSync(dir)) continue
-    for (const entry of readdirSync(dir).sort()) {
-      const full = join(dir, entry)
-      if (statSync(full).isDirectory()) {
-        agents.push({
-          name: entry,
-          dir: `${base}/${entry}`,
-          label: toLabel(entry),
-          color: COLOR_PALETTE[colorIdx++ % COLOR_PALETTE.length],
-        })
+function parseArgs(argv) {
+  const args = { port: null, poll: null, dirs: [] }
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === '--help' || arg === '-h') {
+      printHelp()
+      process.exit(0)
+    }
+    if (arg === '--version' || arg === '-v') {
+      printVersion()
+      process.exit(0)
+    }
+    if ((arg === '--port' || arg === '-p') && argv[i + 1]) {
+      args.port = parseInt(argv[++i], 10)
+      if (isNaN(args.port)) {
+        console.error('  Error: --port requires a number\n')
+        process.exit(1)
       }
     }
+    if (arg === '--poll' && argv[i + 1]) {
+      args.poll = parseInt(argv[++i], 10)
+      if (isNaN(args.poll) || args.poll < 1) {
+        console.error('  Error: --poll requires a positive number (seconds)\n')
+        process.exit(1)
+      }
+    }
+    if ((arg === '--dir' || arg === '-d') && argv[i + 1]) {
+      args.dirs.push(resolve(argv[++i]))
+    }
   }
-
-  if (agents.length === 0) {
-    // Fallback: just use CWD itself
-    agents.push({ name: 'main', dir: '.', label: 'Main', color: COLOR_PALETTE[0] })
-  }
-
-  console.log(`\n  HiveAgents: auto-discovered ${agents.length} agent(s) from apps/ and packages/`)
-  console.log('  Create hive.config.js to customize.\n')
-  return { agents }
+  return args
 }
 
-function toLabel(name) {
-  return name
-    .replace(/[-_]/g, ' ')
-    .replace(/\b\w/g, c => c.toUpperCase())
+function printHelp() {
+  const v = getVersion()
+  console.log(`
+  HiveAgents v${v}
+  Centralized dashboard for managing Claude Code agents across projects
+
+  Hive automatically detects running dev servers on your system,
+  identifies which project they belong to, and lets you manage
+  Claude Code agents for each one from a single UI.
+
+  Usage:
+    hive                     Start Hive (scans current directory for projects)
+    hive --dir ~/Sites       Scan a specific directory for projects
+    hive --port 5000         Override the default UI port (4269)
+    hive --poll 10           Set port scan interval in seconds (default: 5)
+
+  Options:
+    -d, --dir <path>         Directory to scan for projects (repeatable)
+    -p, --port <number>      Server port (default: 4269)
+        --poll <seconds>     Port scan interval (default: 5)
+    -v, --version            Show version
+    -h, --help               Show this help
+
+  How it works:
+    1. Scans directory children for projects (package.json or .git)
+    2. Shows all discovered projects in the UI with one Claude agent each
+    3. Polls for active TCP ports and annotates projects with live ports
+    4. If a dir itself is a project, it's included directly
+
+  Data is stored in ~/.hive/ (terminal history, project state).
+`)
+}
+
+function getVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+    return pkg.version
+  } catch {
+    return '0.0.0'
+  }
+}
+
+function printVersion() {
+  console.log(getVersion())
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-const config = await loadConfig()
-const { startServer } = await import('./server.js')
-startServer(config, CWD)
+const args = parseArgs(process.argv)
+
+const port = args.port ?? 4269
+const pollInterval = (args.poll ?? 5) * 1000
+const scanDirs = args.dirs.length > 0 ? args.dirs : [process.cwd()]
+const dataDir = join(homedir(), '.hive')
+
+// Ensure data directory exists
+mkdirSync(dataDir, { recursive: true })
+
+try {
+  const { startServer } = await import('./server.js')
+  startServer({ port, pollInterval, scanDirs, dataDir })
+} catch (err) {
+  console.error(`\n  Error: ${err.message}\n`)
+  process.exit(1)
+}

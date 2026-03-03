@@ -8,7 +8,8 @@
     "build": "turbo build",
     "typecheck": "turbo typecheck",
     "lint": "turbo lint",
-    "clean": "turbo clean && rm -rf node_modules"
+    "clean": "turbo clean && rm -rf node_modules",
+    "hive": "node packages/hive/src/cli.js --dir ~/Sites"
   },
   "devDependencies": {
     "turbo": "^2.5.0"

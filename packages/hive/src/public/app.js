@@ -14,26 +14,20 @@ const TERM_THEME = {
   white:    '#e4e4e7', brightWhite:   '#f4f4f5',
 }
 
-// ── Multi-repo state ──────────────────────────────────────────────────────────
+// ── State ────────────────────────────────────────────────────────────────────
 
-// { [port]: { port, label, baseUrl, wsBase, agentOrder, agents, agentStatus,
-//             agentActivity, agentWasActive, terminals, activeAgent, model, models } }
-const repoState = {}
+const baseUrl = `${location.protocol}//${location.host}`
+const wsBase = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`
 
-let repoList = []     // ordered list of ports, persisted to localStorage
-let activeRepo = null // currently shown port (number)
+// { [projectId]: { id, name, root, ports, color, running, active, waiting, terminal } }
+const projects = {}
+let projectOrder = []   // ordered list of project IDs
+let activeProject = null
 
-const LS_KEY = 'hive_repos'
+let currentModel = ''
+let models = []
 
-function saveRepoList() {
-  localStorage.setItem(LS_KEY, JSON.stringify(repoList))
-}
-
-function loadRepoList() {
-  try { return JSON.parse(localStorage.getItem(LS_KEY) ?? '[]') } catch { return [] }
-}
-
-// ── Notifications ──
+// ── Notifications ────────────────────────────────────────────────────────────
 
 function requestNotificationPermission() {
   if ('Notification' in window && Notification.permission === 'default') {
@@ -47,14 +41,38 @@ function notify(title, body) {
   n.onclick = () => { window.focus(); n.close() }
 }
 
-function maybeNotify(port, name, title, body) {
-  const repo = repoState[port]
-  if (document.hidden || port !== activeRepo || name !== repo?.activeAgent) {
+function maybeNotify(projectId, title, body) {
+  if (document.hidden || projectId !== activeProject) {
     notify(title, body)
   }
 }
 
-// ── DOM refs ──
+// ── Tab title attention badge ────────────────────────────────────────────────
+
+const ORIGINAL_TITLE = document.title
+
+function updateTabAttention() {
+  const waitingNames = []
+  for (const id of projectOrder) {
+    const p = projects[id]
+    if (p?.waiting) waitingNames.push(p.name)
+  }
+
+  if (waitingNames.length > 0 && document.hidden) {
+    document.title = waitingNames.length === 1
+      ? `(!) ${waitingNames[0]} needs input — ${ORIGINAL_TITLE}`
+      : `(${waitingNames.length}!) Projects need input — ${ORIGINAL_TITLE}`
+  } else {
+    document.title = ORIGINAL_TITLE
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) document.title = ORIGINAL_TITLE
+})
+
+// ── DOM refs ─────────────────────────────────────────────────────────────────
+
 const agentListEl    = document.getElementById('agent-list')
 const termContainer  = document.getElementById('terminal-container')
 const headerColorBar = document.getElementById('header-color-bar')
@@ -66,7 +84,12 @@ const btnStop        = document.getElementById('btn-stop')
 const btnStartAll    = document.getElementById('btn-start-all')
 const btnStopAll     = document.getElementById('btn-stop-all')
 const modelSelect    = document.getElementById('model-select')
-const repoTabsEl     = document.getElementById('repo-tabs')
+const scanIndicator  = document.getElementById('scan-indicator')
+const btnClear           = document.getElementById('btn-clear')
+const btnRestart         = document.getElementById('btn-restart')
+const btnHelp            = document.getElementById('btn-help')
+const shortcutsModal     = document.getElementById('shortcuts-modal')
+const shortcutsClose     = document.getElementById('shortcuts-close')
 const btnPermissions     = document.getElementById('btn-permissions')
 const permissionsModal   = document.getElementById('permissions-modal')
 const permissionsClose   = document.getElementById('permissions-close')
@@ -77,338 +100,338 @@ const permAddAllow       = document.getElementById('perm-add-allow')
 const permAddDeny        = document.getElementById('perm-add-deny')
 const permSave           = document.getElementById('perm-save')
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+// ── Init ─────────────────────────────────────────────────────────────────────
 
 async function init() {
   requestNotificationPermission()
 
-  const primaryPort = parseInt(location.port || '80', 10)
-
-  // Merge: always include primary port first, then any saved extras
-  const saved = loadRepoList().filter(p => p !== primaryPort)
-  repoList = [primaryPort, ...saved]
-
-  // Init all repos in parallel — skip ones we can't reach
-  await Promise.all(repoList.map(p => initRepo(p).catch(() => null)))
-
-  // Remove ports that failed to load (server not running)
-  repoList = repoList.filter(p => repoState[p])
-  saveRepoList()
-
-  renderRepoTabs()
-  if (repoList.length > 0) await selectRepo(repoList[0])
-}
-
-// ── Repo management ───────────────────────────────────────────────────────────
-
-async function initRepo(port) {
-  const base = `http://localhost:${port}`
-  const wsBase = `ws://localhost:${port}`
-
-  const [infoData, agentData, modelData] = await Promise.all([
-    fetch(`${base}/api/info`).then(r => r.json()),
-    fetch(`${base}/api/agents`).then(r => r.json()),
-    fetch(`${base}/api/model`).then(r => r.json()),
-  ])
-
-  const agentOrder = agentData.order ?? Object.keys(agentData.agents)
-  const agents = {}
-  const agentStatus = {}
-  const agentActivity = {}
-  const agentWasActive = {}
-  const agentWaiting = {}
-
-  for (const name of agentOrder) {
-    const a = agentData.agents[name]
-    if (!a) continue
-    agents[name] = a
-    agentStatus[name] = a.running
-    agentActivity[name] = a.active ?? false
-    agentWasActive[name] = false
-    agentWaiting[name] = a.waiting ?? false
-  }
-
-  repoState[port] = {
-    port,
-    label: infoData.label ?? `localhost:${port}`,
-    baseUrl: base,
-    wsBase,
-    agentOrder,
-    agents,
-    agentStatus,
-    agentActivity,
-    agentWasActive,
-    agentWaiting,
-    terminals: {},
-    activeAgent: null,
-    model: modelData.model,
-    models: modelData.models,
-  }
-}
-
-async function addRepo() {
-  const input = window.prompt('Port of running Hive instance:')
-  if (!input) return
-  const port = parseInt(input.trim(), 10)
-  if (!port || isNaN(port)) return window.alert('Invalid port number.')
-  if (repoList.includes(port)) {
-    // Already added — just switch to it
-    return selectRepo(port)
-  }
-
+  // Load model info
   try {
-    await initRepo(port)
-  } catch {
-    return window.alert(`Could not connect to Hive on port ${port}.\nMake sure it's running.`)
+    const data = await fetch(`${baseUrl}/api/model`).then(r => r.json())
+    currentModel = data.model
+    models = data.models
+    syncModelSelector()
+  } catch (err) {
+    console.error('Failed to load model info:', err)
   }
 
-  repoList.push(port)
-  saveRepoList()
-  renderRepoTabs()
-  selectRepo(port)
-}
-
-function removeRepo(port) {
-  // Clean up terminals
-  const repo = repoState[port]
-  if (repo) {
-    for (const name of Object.keys(repo.terminals)) {
-      const t = repo.terminals[name]
-      t.resizeObserver.disconnect()
-      t.ws.current?.close()
-      t.div.remove()
-    }
-    delete repoState[port]
+  // Load initial projects
+  try {
+    const data = await fetch(`${baseUrl}/api/projects`).then(r => r.json())
+    updateProjects(data.projects)
+  } catch (err) {
+    console.error('Failed to load projects:', err)
   }
 
-  repoList = repoList.filter(p => p !== port)
-  saveRepoList()
-  renderRepoTabs()
+  // Connect control WebSocket for live updates
+  connectControl()
 
-  if (activeRepo === port) {
-    activeRepo = null
-    if (repoList.length > 0) {
-      selectRepo(repoList[0])
-    } else {
-      agentListEl.innerHTML = ''
-      headerName.textContent = 'No repos'
-    }
+  // Select first project
+  if (projectOrder.length > 0) {
+    selectProject(projectOrder[0])
   }
 }
 
-// ── Repo tabs UI ──────────────────────────────────────────────────────────────
+// ── Control WebSocket ────────────────────────────────────────────────────────
 
-function renderRepoTabs() {
-  repoTabsEl.innerHTML = ''
+let controlWs = null
 
-  for (const port of repoList) {
-    const repo = repoState[port]
-    if (!repo) continue
+function connectControl() {
+  controlWs = new WebSocket(`${wsBase}/ws/control`)
 
-    const tab = document.createElement('div')
-    tab.className = 'repo-tab' + (port === activeRepo ? ' active' : '')
-    tab.dataset.port = port
-
-    const labelSpan = document.createElement('span')
-    labelSpan.textContent = repo.label
-
-    const closeBtn = document.createElement('button')
-    closeBtn.className = 'repo-tab-close'
-    closeBtn.title = 'Remove repo'
-    closeBtn.textContent = '×'
-    closeBtn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      removeRepo(port)
-    })
-
-    tab.appendChild(labelSpan)
-    tab.appendChild(closeBtn)
-    tab.addEventListener('click', () => selectRepo(port))
-    repoTabsEl.appendChild(tab)
-  }
-
-  // '+' button
-  const addBtn = document.createElement('button')
-  addBtn.className = 'repo-tab-add'
-  addBtn.title = 'Add another Hive repo'
-  addBtn.textContent = '+'
-  addBtn.addEventListener('click', addRepo)
-  repoTabsEl.appendChild(addBtn)
-}
-
-// ── Select repo ───────────────────────────────────────────────────────────────
-
-async function selectRepo(port) {
-  const repo = repoState[port]
-  if (!repo) return
-
-  // Deactivate all terminals from old repo
-  if (activeRepo && activeRepo !== port) {
-    const old = repoState[activeRepo]
-    if (old?.activeAgent && old.terminals[old.activeAgent]) {
-      old.terminals[old.activeAgent].div.classList.remove('active')
-    }
-  }
-
-  activeRepo = port
-
-  // Update tab highlights
-  repoTabsEl.querySelectorAll('.repo-tab').forEach(el => {
-    el.classList.toggle('active', parseInt(el.dataset.port, 10) === port)
+  controlWs.addEventListener('message', (e) => {
+    try {
+      const msg = JSON.parse(e.data)
+      if (msg.type === 'projects:changed') {
+        updateProjects(msg.projects)
+      }
+    } catch { /* ignore */ }
   })
 
-  // Sync model selector to this repo's model
-  syncModelSelector(repo)
-
-  // Re-render sidebar agents for this repo
-  renderSidebar()
-
-  // Select agent: restore previous or pick first
-  const agentToSelect = repo.activeAgent ?? repo.agentOrder[0]
-  if (agentToSelect) {
-    selectAgent(agentToSelect)
-  } else {
-    headerName.textContent = 'No agents'
-  }
+  controlWs.addEventListener('close', () => {
+    setTimeout(connectControl, 3000)
+  })
 }
 
-// ── Model selector ────────────────────────────────────────────────────────────
+// ── Project management ───────────────────────────────────────────────────────
 
-function syncModelSelector(repo) {
+function updateProjects(projectList) {
+  const newIds = new Set(projectList.map(p => p.id))
+  const flash = scanIndicator
+  if (flash) {
+    flash.classList.add('scanning')
+    setTimeout(() => flash.classList.remove('scanning'), 800)
+  }
+
+  // Add or update projects
+  for (const p of projectList) {
+    if (projects[p.id]) {
+      // Update mutable fields
+      const existing = projects[p.id]
+      const wasActive = existing.active
+      existing.ports = p.ports
+      existing.running = p.running
+      existing.active = p.active
+      existing.waiting = p.waiting
+      existing.color = p.color
+      updateSidebarItem(p.id)
+      if (p.id === activeProject) updateHeader()
+
+      // Notify on state transitions
+      if (wasActive && !p.active && existing.running) {
+        if (p.waiting) {
+          maybeNotify(p.id, `${p.name} needs input`, 'Waiting for your response')
+        } else {
+          maybeNotify(p.id, `${p.name} finished`, 'Claude is done responding')
+        }
+      }
+    } else {
+      // New project
+      projects[p.id] = {
+        ...p,
+        terminal: null,
+      }
+      if (!projectOrder.includes(p.id)) projectOrder.push(p.id)
+    }
+  }
+
+  // Remove gone projects
+  for (const id of [...projectOrder]) {
+    if (!newIds.has(id)) {
+      const p = projects[id]
+      if (p?.terminal) {
+        p.terminal.resizeObserver.disconnect()
+        p.terminal.ws.current?.close()
+        p.terminal.div.remove()
+      }
+      delete projects[id]
+      projectOrder = projectOrder.filter(x => x !== id)
+
+      if (activeProject === id) {
+        activeProject = null
+        if (projectOrder.length > 0) selectProject(projectOrder[0])
+        else {
+          headerName.textContent = 'No projects detected'
+          headerPort.style.display = 'none'
+        }
+      }
+    }
+  }
+
+  renderSidebar()
+  updateTabAttention()
+}
+
+// ── Model selector ───────────────────────────────────────────────────────────
+
+function syncModelSelector() {
   modelSelect.innerHTML = ''
-  for (const m of (repo.models ?? [])) {
+  for (const m of models) {
     const opt = document.createElement('option')
     opt.value = m.id
     opt.textContent = m.label
-    if (m.id === repo.model) opt.selected = true
+    if (m.id === currentModel) opt.selected = true
     modelSelect.appendChild(opt)
   }
 }
 
 modelSelect.addEventListener('change', () => {
-  const repo = repoState[activeRepo]
-  if (!repo) return
-  repo.model = modelSelect.value
-  fetch(`${repo.baseUrl}/api/model`, {
+  currentModel = modelSelect.value
+  fetch(`${baseUrl}/api/model`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: modelSelect.value }),
   })
 })
 
-// ── Sidebar ───────────────────────────────────────────────────────────────────
+// ── Sidebar ──────────────────────────────────────────────────────────────────
 
 function renderSidebar() {
   agentListEl.innerHTML = ''
-  const repo = repoState[activeRepo]
-  if (!repo) return
 
-  for (const name of repo.agentOrder) {
-    const agent = repo.agents[name]
-    if (!agent) continue
+  if (projectOrder.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'sidebar-empty'
+    empty.innerHTML = '<span>No projects found</span><span class="sidebar-empty-sub">Run hive from a directory with projects,<br>or use --dir to specify one</span>'
+    agentListEl.appendChild(empty)
+    return
+  }
 
-    const item = document.createElement('div')
-    item.className = 'agent-item'
-    item.dataset.name = name
-    item.style.setProperty('--agent-color', agent.color)
+  // Group: standalone projects + group headers with children
+  const standalone = []
+  const groups = new Map() // groupId -> { parent, children }
 
-    item.innerHTML = `
-      <span class="agent-color-dot ${repo.agentStatus[name] ? 'running' : ''}"
-            style="background:${agent.color}"></span>
-      <span class="agent-info">
-        <span class="agent-label">${agent.label}</span>
-        <span class="agent-meta">${agent.port ? `:${agent.port}` : 'agent'}</span>
-      </span>
-      <span class="agent-status ${repo.agentStatus[name] ? 'running' : ''}"></span>
-    `
+  for (const id of projectOrder) {
+    const p = projects[id]
+    if (!p) continue
+    if (p.group && p.groupId) {
+      if (!groups.has(p.groupId)) {
+        groups.set(p.groupId, { parent: projects[p.groupId] || null, children: [] })
+      }
+      groups.get(p.groupId).children.push(p)
+    } else if (!groups.has(id)) {
+      // Could be a group parent or standalone
+      const hasChildren = projectOrder.some(oid => projects[oid]?.groupId === id)
+      if (hasChildren) {
+        if (!groups.has(id)) groups.set(id, { parent: p, children: [] })
+      } else {
+        standalone.push(p)
+      }
+    }
+  }
 
-    item.addEventListener('click', () => selectAgent(name))
-    agentListEl.appendChild(item)
+  // Render groups first, then standalone
+  for (const [, { parent, children }] of groups) {
+    // Group header
+    const header = document.createElement('div')
+    header.className = 'group-header'
+    if (parent) {
+      header.dataset.id = parent.id
+      header.style.setProperty('--agent-color', parent.color)
+
+      const chevron = document.createElement('span')
+      chevron.className = 'group-chevron'
+      chevron.innerHTML = '&#x25BE;'
+
+      const name = document.createElement('span')
+      name.className = 'group-name'
+      name.textContent = parent.name
+
+      header.append(chevron, name)
+      header.addEventListener('click', () => selectProject(parent.id))
+    }
+    agentListEl.appendChild(header)
+
+    // Children
+    for (const child of children) {
+      agentListEl.appendChild(buildProjectItem(child, true))
+    }
+  }
+
+  // Standalone projects
+  for (const p of standalone) {
+    agentListEl.appendChild(buildProjectItem(p, false))
   }
 }
 
-function updateSidebarItem(port, name) {
-  if (port !== activeRepo) return
-  const repo = repoState[port]
-  const item = agentListEl.querySelector(`[data-name="${name}"]`)
-  if (!item || !repo) return
-  const running = repo.agentStatus[name]
-  const active  = repo.agentActivity[name]
-  const waiting = repo.agentWaiting[name]
-  const dot    = item.querySelector('.agent-color-dot')
+function buildProjectItem(p, isChild) {
+  const item = document.createElement('div')
+  item.className = 'agent-item' + (p.id === activeProject ? ' active' : '') + (isChild ? ' child' : '')
+  item.dataset.id = p.id
+  item.style.setProperty('--agent-color', p.color)
+
+  const dot = document.createElement('span')
+  dot.className = 'agent-color-dot'
+  if (p.running) dot.classList.add('running')
+  if (p.running && p.active) dot.classList.add('thinking')
+  if (p.running && !p.active && p.waiting) dot.classList.add('waiting')
+  dot.style.background = p.color
+
+  const info = document.createElement('span')
+  info.className = 'agent-info'
+  const label = document.createElement('span')
+  label.className = 'agent-label'
+  label.textContent = p.name
+  const meta = document.createElement('span')
+  meta.className = 'agent-meta'
+  meta.textContent = p.ports.length > 0 ? p.ports.map(port => `:${port}`).join(' ') : ''
+  info.append(label, meta)
+
+  const status = document.createElement('span')
+  status.className = 'agent-status' + (p.running ? ' running' : '')
+
+  item.append(dot, info, status)
+  item.addEventListener('click', () => selectProject(p.id))
+  return item
+}
+
+function updateSidebarItem(id) {
+  const item = agentListEl.querySelector(`[data-id="${id}"]`)
+  if (!item) return
+  const p = projects[id]
+  if (!p) return
+
+  const dot = item.querySelector('.agent-color-dot')
   const status = item.querySelector('.agent-status')
-  if (dot) {
-    dot.classList.toggle('running', running)
-    dot.classList.toggle('thinking', running && active)
-    dot.classList.toggle('waiting', running && !active && waiting)
-  }
-  if (status) status.classList.toggle('running', running)
 
-  const t = repo.terminals[name]
-  if (t) t.div.classList.toggle('stopped', !running)
+  if (dot) {
+    dot.classList.toggle('running', p.running)
+    dot.classList.toggle('thinking', p.running && p.active)
+    dot.classList.toggle('waiting', p.running && !p.active && p.waiting)
+  }
+  if (status) status.classList.toggle('running', p.running)
+
+  if (p.terminal) p.terminal.div.classList.toggle('stopped', !p.running)
 }
 
-// ── Select / switch agent ─────────────────────────────────────────────────────
+// ── Select project ───────────────────────────────────────────────────────────
 
-function selectAgent(name) {
-  const repo = repoState[activeRepo]
-  if (!repo || !repo.agents[name]) return
+function selectProject(id) {
+  const p = projects[id]
+  if (!p) return
 
-  // Deactivate currently active terminal for this repo
-  if (repo.activeAgent && repo.terminals[repo.activeAgent]) {
-    repo.terminals[repo.activeAgent].div.classList.remove('active')
+  // Deactivate previous terminal
+  if (activeProject && projects[activeProject]?.terminal) {
+    projects[activeProject].terminal.div.classList.remove('active')
   }
 
+  activeProject = id
+
+  // Update sidebar highlights
   agentListEl.querySelectorAll('.agent-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.name === name)
+    el.classList.toggle('active', el.dataset.id === id)
   })
 
-  repo.activeAgent = name
-  const agent = repo.agents[name]
-
-  headerColorBar.style.background = agent.color
-  headerDot.style.background = agent.color
-  const isActive = repo.agentActivity[name] ?? false
-  const isWaiting = repo.agentWaiting[name] ?? false
-  headerDot.classList.toggle('thinking', isActive)
-  headerDot.classList.toggle('waiting', !isActive && isWaiting)
-  headerName.textContent = agent.label
-
-  if (agent.port) {
-    headerPort.textContent = `:${agent.port}`
-    headerPort.href = `http://localhost:${agent.port}`
-    headerPort.classList.add('linkable')
-  } else {
-    headerPort.textContent = 'agent'
-    headerPort.removeAttribute('href')
-    headerPort.classList.remove('linkable')
-  }
-  headerPort.style.display = ''
-  document.documentElement.style.setProperty('--active-color', agent.color)
-
+  updateHeader()
   updateHeaderButtons()
 
-  if (!repo.terminals[name]) createTerminal(activeRepo, name)
-  repo.terminals[name].div.classList.add('active')
+  // Create terminal if needed
+  if (!p.terminal) createTerminal(id)
+  p.terminal.div.classList.add('active')
 
   requestAnimationFrame(() => {
-    const t = repo.terminals[name]
-    if (!t) return
-    const atBottom = t.term.buffer.active.viewportY >= t.term.buffer.active.baseY
-    t.fitAddon.fit()
-    if (atBottom) t.term.scrollToBottom()
+    if (!p.terminal) return
+    const atBottom = p.terminal.term.buffer.active.viewportY >= p.terminal.term.buffer.active.baseY
+    p.terminal.fitAddon.fit()
+    if (atBottom) p.terminal.term.scrollToBottom()
   })
 }
 
-// ── Terminal creation ─────────────────────────────────────────────────────────
+function updateHeader() {
+  const p = projects[activeProject]
+  if (!p) return
 
-function createTerminal(port, name) {
-  const repo = repoState[port]
-  if (!repo) return
+  headerColorBar.style.background = p.color
+  headerDot.style.background = p.color
+  headerDot.classList.toggle('thinking', p.active)
+  headerDot.classList.toggle('waiting', !p.active && p.waiting)
+  headerName.textContent = p.name
+  document.documentElement.style.setProperty('--active-color', p.color)
+
+  if (p.ports.length > 0) {
+    headerPort.textContent = p.ports.map(port => `:${port}`).join(' ')
+    headerPort.href = `http://localhost:${p.ports[0]}`
+    headerPort.classList.add('linkable')
+    headerPort.style.display = ''
+  } else {
+    headerPort.style.display = 'none'
+  }
+}
+
+// ── Terminal creation ────────────────────────────────────────────────────────
+
+function createTerminal(id) {
+  const p = projects[id]
+  if (!p) return
+
+  if (typeof Terminal === 'undefined') {
+    console.error('xterm.js failed to load from CDN')
+    return
+  }
 
   const div = document.createElement('div')
   div.className = 'terminal-instance active'
-  div.dataset.repo = port
+  div.dataset.project = id
   termContainer.appendChild(div)
 
   const term = new Terminal({
@@ -424,6 +447,18 @@ function createTerminal(port, name) {
 
   const fitAddon = new FitAddon.FitAddon()
   term.loadAddon(fitAddon)
+
+  let searchAddon = null
+  if (typeof SearchAddon !== 'undefined') {
+    searchAddon = new SearchAddon.SearchAddon()
+    term.loadAddon(searchAddon)
+  }
+
+  term.attachCustomKeyEventHandler((e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'k')) return false
+    return true
+  })
+
   term.open(div)
   fitAddon.fit()
 
@@ -450,52 +485,48 @@ function createTerminal(port, name) {
   })
   resizeObserver.observe(termContainer)
 
-  repo.terminals[name] = { term, fitAddon, div, ws: wsRef, resizeObserver }
-  if (!repo.agentStatus[name]) div.classList.add('stopped')
-  connectWS(port, name, term, wsRef)
+  p.terminal = { term, fitAddon, searchAddon, div, ws: wsRef, resizeObserver }
+  if (!p.running) div.classList.add('stopped')
+  connectProjectWS(id, term, wsRef)
 }
 
-// ── WebSocket ─────────────────────────────────────────────────────────────────
+// ── WebSocket (project terminal) ─────────────────────────────────────────────
 
-function connectWS(port, name, term, wsRef, skipBuffer = false) {
-  const repo = repoState[port]
-  if (!repo) return
-
-  const wsUrl = `${repo.wsBase}/ws?agent=${name}&skipBuffer=${skipBuffer}`
+function connectProjectWS(id, term, wsRef, skipBuffer = false) {
+  const wsUrl = `${wsBase}/ws?project=${id}&skipBuffer=${skipBuffer}`
   const ws = new WebSocket(wsUrl)
   wsRef.current = ws
 
   ws.addEventListener('message', (e) => {
-    const repo = repoState[port]
-    if (!repo) return
+    const p = projects[id]
+    if (!p) return
     try {
       const msg = JSON.parse(e.data)
       if (msg.type === 'output') {
         term.write(msg.data)
       } else if (msg.type === 'status') {
-        const wasRunning = repo.agentStatus[name]
-        repo.agentStatus[name] = msg.running
-        updateSidebarItem(port, name)
-        if (port === activeRepo && name === repo.activeAgent) updateHeaderButtons()
+        const wasRunning = p.running
+        p.running = msg.running
+        updateSidebarItem(id)
+        if (id === activeProject) updateHeaderButtons()
         if (wasRunning && !msg.running) {
-          maybeNotify(port, name, `${repo.agents[name]?.label ?? name} stopped`, 'Agent session ended')
+          maybeNotify(id, `${p.name} stopped`, 'Agent session ended')
         }
       } else if (msg.type === 'activity') {
-        const prev = repo.agentWasActive[name]
-        repo.agentActivity[name] = msg.active
-        repo.agentWaiting[name] = msg.waiting ?? false
-        repo.agentWasActive[name] = msg.active
-        updateSidebarItem(port, name)
-        if (port === activeRepo && name === repo.activeAgent) {
+        const wasActive = p.active
+        p.active = msg.active
+        p.waiting = msg.waiting ?? false
+        updateSidebarItem(id)
+        updateTabAttention()
+        if (id === activeProject) {
           headerDot.classList.toggle('thinking', msg.active)
           headerDot.classList.toggle('waiting', !msg.active && (msg.waiting ?? false))
         }
-        if (prev && !msg.active && repo.agentStatus[name]) {
-          const label = repo.agents[name]?.label ?? name
+        if (wasActive && !msg.active && p.running) {
           if (msg.waiting) {
-            maybeNotify(port, name, `${label} needs input`, 'Waiting for your response')
+            maybeNotify(id, `${p.name} needs input`, 'Waiting for your response')
           } else {
-            maybeNotify(port, name, `${label} finished`, 'Claude is done responding')
+            maybeNotify(id, `${p.name} finished`, 'Claude is done responding')
           }
         }
       }
@@ -509,74 +540,164 @@ function connectWS(port, name, term, wsRef, skipBuffer = false) {
   ws.addEventListener('close', () => {
     term.write('\r\n\x1b[90m[disconnected — reconnecting...]\x1b[0m\r\n')
     setTimeout(() => {
-      const repo = repoState[port]
-      if (!repo || !repo.terminals[name]) return
-      connectWS(port, name, term, wsRef, true)
+      if (!projects[id]?.terminal) return
+      connectProjectWS(id, term, wsRef, true)
     }, 3000)
   })
 }
 
-// ── Header buttons ────────────────────────────────────────────────────────────
+// ── Header buttons ───────────────────────────────────────────────────────────
 
 function updateHeaderButtons() {
-  const repo = repoState[activeRepo]
-  if (!repo?.activeAgent) return
-  const running = repo.agentStatus[repo.activeAgent]
-  btnStart.style.opacity = running ? '0.4' : '1'
-  btnStop.style.opacity  = running ? '1'   : '0.4'
+  const p = projects[activeProject]
+  if (!p) return
+  btnStart.style.opacity = p.running ? '0.4' : '1'
+  btnStop.style.opacity  = p.running ? '1'   : '0.4'
 }
 
-btnStart.addEventListener('click', async () => {
-  const repo = repoState[activeRepo]
-  if (!repo?.activeAgent) return
-  const name = repo.activeAgent
-  await fetch(`${repo.baseUrl}/api/agents/${name}/start`, { method: 'POST' })
-  repo.agentStatus[name] = true
-  updateSidebarItem(activeRepo, name)
-  updateHeaderButtons()
-})
+async function projectAction(endpoint) {
+  const p = projects[activeProject]
+  if (!p) return
+  try {
+    const res = await fetch(`${baseUrl}/api/projects/${p.id}/${endpoint}`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      console.error(`${endpoint} failed:`, data.error ?? res.statusText)
+    }
+  } catch (err) {
+    console.error(`${endpoint} failed:`, err.message)
+  }
+}
 
-btnStop.addEventListener('click', async () => {
-  const repo = repoState[activeRepo]
-  if (!repo?.activeAgent) return
-  const name = repo.activeAgent
-  await fetch(`${repo.baseUrl}/api/agents/${name}/stop`, { method: 'POST' })
-  repo.agentStatus[name] = false
-  updateSidebarItem(activeRepo, name)
-  updateHeaderButtons()
-})
+btnStart.addEventListener('click', () => projectAction('start'))
+btnStop.addEventListener('click', () => projectAction('stop'))
 
 btnStartAll.addEventListener('click', async () => {
-  const repo = repoState[activeRepo]
-  if (!repo) return
-  for (const name of repo.agentOrder) {
-    await fetch(`${repo.baseUrl}/api/agents/${name}/start`, { method: 'POST' })
-    repo.agentStatus[name] = true
-    updateSidebarItem(activeRepo, name)
+  for (const id of projectOrder) {
+    try {
+      await fetch(`${baseUrl}/api/projects/${id}/start`, { method: 'POST' })
+    } catch { /* continue */ }
   }
-  updateHeaderButtons()
 })
 
 btnStopAll.addEventListener('click', async () => {
-  const repo = repoState[activeRepo]
-  if (!repo) return
-  for (const name of repo.agentOrder) {
-    await fetch(`${repo.baseUrl}/api/agents/${name}/stop`, { method: 'POST' })
-    repo.agentStatus[name] = false
-    updateSidebarItem(activeRepo, name)
+  for (const id of projectOrder) {
+    try {
+      await fetch(`${baseUrl}/api/projects/${id}/stop`, { method: 'POST' })
+    } catch { /* continue */ }
   }
-  updateHeaderButtons()
 })
 
-// ── Permissions modal ─────────────────────────────────────────────────────────
+// ── Clear terminal ───────────────────────────────────────────────────────────
+
+btnClear.addEventListener('click', () => {
+  const p = projects[activeProject]
+  if (!p?.terminal) return
+  p.terminal.term.clear()
+  if (p.terminal.ws.current?.readyState === WebSocket.OPEN) {
+    p.terminal.ws.current.send(JSON.stringify({ type: 'clear' }))
+  }
+})
+
+// ── Restart ──────────────────────────────────────────────────────────────────
+
+btnRestart.addEventListener('click', async () => {
+  const p = projects[activeProject]
+  if (!p) return
+  const origHTML = btnRestart.innerHTML
+  btnRestart.disabled = true
+  btnRestart.innerHTML = '<span style="font-size:11px">...</span>'
+
+  if (p.terminal) p.terminal.term.clear()
+
+  try {
+    await fetch(`${baseUrl}/api/projects/${p.id}/restart`, { method: 'POST' })
+  } catch (err) {
+    console.error('Restart failed:', err)
+  } finally {
+    btnRestart.disabled = false
+    btnRestart.innerHTML = origHTML
+  }
+})
+
+// ── Shortcuts modal ──────────────────────────────────────────────────────────
+
+function openShortcutsModal() { shortcutsModal.style.display = '' }
+function closeShortcutsModal() { shortcutsModal.style.display = 'none' }
+
+btnHelp.addEventListener('click', openShortcutsModal)
+shortcutsClose.addEventListener('click', closeShortcutsModal)
+shortcutsModal.addEventListener('click', (e) => {
+  if (e.target === shortcutsModal) closeShortcutsModal()
+})
+
+// ── Terminal search bar ──────────────────────────────────────────────────────
+
+function openSearchBar() {
+  const p = projects[activeProject]
+  if (!p?.terminal?.searchAddon) return
+
+  const t = p.terminal
+  if (t.div.querySelector('.search-bar')) {
+    t.div.querySelector('.search-input').focus()
+    return
+  }
+
+  const bar = document.createElement('div')
+  bar.className = 'search-bar'
+  bar.innerHTML = `
+    <input type="text" class="search-input" placeholder="Search..." />
+    <button class="search-btn search-prev" title="Previous (Shift+Enter)">&#x25B2;</button>
+    <button class="search-btn search-next" title="Next (Enter)">&#x25BC;</button>
+    <button class="search-btn search-close" title="Close (Esc)">&times;</button>
+  `
+
+  const input = bar.querySelector('.search-input')
+  const prevBtn = bar.querySelector('.search-prev')
+  const nextBtn = bar.querySelector('.search-next')
+  const closeBtn = bar.querySelector('.search-close')
+
+  function doSearch(direction) {
+    const query = input.value
+    if (!query) return
+    if (direction === 'prev') t.searchAddon.findPrevious(query)
+    else t.searchAddon.findNext(query)
+  }
+
+  input.addEventListener('input', () => doSearch('next'))
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); doSearch(e.shiftKey ? 'prev' : 'next') }
+    if (e.key === 'Escape') { e.preventDefault(); closeSearchBar() }
+  })
+
+  prevBtn.addEventListener('click', () => doSearch('prev'))
+  nextBtn.addEventListener('click', () => doSearch('next'))
+  closeBtn.addEventListener('click', closeSearchBar)
+
+  t.div.insertBefore(bar, t.div.firstChild)
+  input.focus()
+}
+
+function closeSearchBar() {
+  const p = projects[activeProject]
+  if (!p?.terminal) return
+  const bar = p.terminal.div.querySelector('.search-bar')
+  if (bar) {
+    if (p.terminal.searchAddon) p.terminal.searchAddon.clearDecorations()
+    bar.remove()
+  }
+  p.terminal.term.focus()
+}
+
+// ── Permissions modal ────────────────────────────────────────────────────────
 
 let permDraft = { defaultMode: 'default', permissions: { allow: [], deny: [] } }
 
 async function loadPermissions() {
-  const repo = repoState[activeRepo]
-  if (!repo) return
+  const p = projects[activeProject]
+  if (!p) return
   try {
-    const res = await fetch(`${repo.baseUrl}/api/permissions`)
+    const res = await fetch(`${baseUrl}/api/projects/${p.id}/permissions`)
     const data = await res.json()
     permDraft = {
       defaultMode: data.defaultMode ?? 'default',
@@ -593,19 +714,16 @@ async function loadPermissions() {
 function renderPermRule(rule) {
   const item = document.createElement('div')
   item.className = 'perm-rule-item'
-
   const input = document.createElement('input')
   input.type = 'text'
   input.className = 'perm-rule-input'
   input.value = rule
   input.placeholder = 'e.g. Bash(git diff *)'
-
   const removeBtn = document.createElement('button')
   removeBtn.className = 'perm-rule-remove'
   removeBtn.title = 'Remove rule'
   removeBtn.textContent = '\u00d7'
   removeBtn.addEventListener('click', () => item.remove())
-
   item.appendChild(input)
   item.appendChild(removeBtn)
   return item
@@ -613,16 +731,10 @@ function renderPermRule(rule) {
 
 function renderPermissions() {
   permModeSelect.value = permDraft.defaultMode
-
   permAllowList.innerHTML = ''
-  for (const rule of permDraft.permissions.allow) {
-    permAllowList.appendChild(renderPermRule(rule))
-  }
-
+  for (const rule of permDraft.permissions.allow) permAllowList.appendChild(renderPermRule(rule))
   permDenyList.innerHTML = ''
-  for (const rule of permDraft.permissions.deny) {
-    permDenyList.appendChild(renderPermRule(rule))
-  }
+  for (const rule of permDraft.permissions.deny) permDenyList.appendChild(renderPermRule(rule))
 }
 
 function syncDraftFromDOM() {
@@ -640,21 +752,18 @@ function syncDraftFromDOM() {
 }
 
 async function savePermissions() {
-  const repo = repoState[activeRepo]
-  if (!repo) return
+  const p = projects[activeProject]
+  if (!p) return
   syncDraftFromDOM()
   try {
-    const res = await fetch(`${repo.baseUrl}/api/permissions`, {
-      method: 'POST',
+    const res = await fetch(`${baseUrl}/api/projects/${p.id}/permissions`, {
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(permDraft),
     })
     const data = await res.json()
-    if (data.ok) {
-      closePermissionsModal()
-    } else {
-      window.alert('Failed to save: ' + (data.error ?? 'Unknown error'))
-    }
+    if (data.ok) closePermissionsModal()
+    else window.alert('Failed to save: ' + (data.error ?? 'Unknown error'))
   } catch (err) {
     window.alert('Failed to save permissions: ' + err.message)
   }
@@ -666,44 +775,59 @@ async function openPermissionsModal() {
   permissionsModal.style.display = ''
 }
 
-function closePermissionsModal() {
-  permissionsModal.style.display = 'none'
-}
+function closePermissionsModal() { permissionsModal.style.display = 'none' }
 
 btnPermissions.addEventListener('click', openPermissionsModal)
 permissionsClose.addEventListener('click', closePermissionsModal)
 permSave.addEventListener('click', savePermissions)
-
 permAddAllow.addEventListener('click', () => {
   permAllowList.appendChild(renderPermRule(''))
   const inputs = permAllowList.querySelectorAll('.perm-rule-input')
   inputs[inputs.length - 1].focus()
 })
-
 permAddDeny.addEventListener('click', () => {
   permDenyList.appendChild(renderPermRule(''))
   const inputs = permDenyList.querySelectorAll('.perm-rule-input')
   inputs[inputs.length - 1].focus()
 })
-
 permissionsModal.addEventListener('click', (e) => {
   if (e.target === permissionsModal) closePermissionsModal()
 })
 
-// ── Keyboard shortcuts: Alt+1–9 ───────────────────────────────────────────────
+// ── Keyboard shortcuts ───────────────────────────────────────────────────────
+
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && permissionsModal.style.display !== 'none') {
-    closePermissionsModal()
+  if (e.key === 'Escape') {
+    if (shortcutsModal.style.display !== 'none') { closeShortcutsModal(); return }
+    if (permissionsModal.style.display !== 'none') { closePermissionsModal(); return }
+    closeSearchBar()
     return
   }
+
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    e.preventDefault()
+    btnClear.click()
+    return
+  }
+
+  if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+    e.preventDefault()
+    openSearchBar()
+    return
+  }
+
+  if (e.key === '?' && !e.target.closest('input, textarea, select, .xterm')) {
+    openShortcutsModal()
+    return
+  }
+
+  // Alt+1-9 switch projects
   if (e.altKey && !e.ctrlKey && !e.metaKey) {
-    const repo = repoState[activeRepo]
-    if (!repo) return
     const idx = parseInt(e.key, 10) - 1
-    const name = repo.agentOrder[idx]
-    if (name && repo.agents[name]) {
+    const id = projectOrder[idx]
+    if (id && projects[id]) {
       e.preventDefault()
-      selectAgent(name)
+      selectProject(id)
     }
   }
 })
