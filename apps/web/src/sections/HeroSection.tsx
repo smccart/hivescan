@@ -35,7 +35,7 @@ export default function HeroSection() {
           <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer" className="text-neutral-300 hover:text-white transition-colors">
             Claude Code
           </a>{' '}
-          agents — terminals, status indicators, session persistence, and model switching.
+          agents — terminals, status indicators, session persistence, model switching, and permissions management.
         </p>
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -101,22 +101,34 @@ function TerminalMockup() {
           </svg>
           <span className="text-xs font-semibold text-neutral-300">HiveAgents</span>
         </div>
-        {agents.map((a, i) => (
-          <div
-            key={a.name}
-            className={`flex items-center gap-2 px-3 py-2 text-xs ${i === 0 ? 'bg-[#1c1c1c] border-l-2' : ''}`}
-            style={{ borderColor: i === 0 ? a.color : 'transparent' }}
-          >
-            <span
-              className="w-2 h-2 rounded-full flex-shrink-0"
-              style={{ background: a.running ? a.color : '#3f3f46' }}
-            />
-            <span className={i === 0 ? 'text-white' : 'text-neutral-400'}>{a.name}</span>
-            {a.active && (
-              <span className="ml-auto text-[10px]" style={{ color: a.color }}>●</span>
-            )}
+        <div className="flex-1">
+          {agents.map((a, i) => (
+            <div
+              key={a.name}
+              className={`flex items-center gap-2 px-3 py-2 text-xs ${i === 0 ? 'bg-[#1c1c1c] border-l-2' : ''}`}
+              style={{ borderColor: i === 0 ? a.color : 'transparent' }}
+            >
+              <span
+                className="w-2 h-2 rounded-full flex-shrink-0"
+                style={{ background: a.running ? a.color : '#3f3f46' }}
+              />
+              <span className={i === 0 ? 'text-white' : 'text-neutral-400'}>{a.name}</span>
+              {a.active && (
+                <span className="ml-auto text-[10px]" style={{ color: a.color }}>●</span>
+              )}
+            </div>
+          ))}
+        </div>
+        {/* Sidebar footer */}
+        <div className="px-3 pt-2 mt-auto border-t border-[#1e1e1e] flex flex-col gap-1.5">
+          <div className="flex items-center gap-1.5 text-[10px] text-neutral-500 px-1 py-1 rounded" style={{ background: '#161616', border: '1px solid #1e1e1e' }}>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+            </svg>
+            Permissions
           </div>
-        ))}
+        </div>
       </div>
 
       {/* Terminal area */}

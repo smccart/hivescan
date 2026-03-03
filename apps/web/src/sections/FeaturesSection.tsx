@@ -1,4 +1,4 @@
-import { Layers, Zap, RotateCcw, Settings2 } from 'lucide-react'
+import { Layers, Zap, RotateCcw, Settings2, ShieldCheck } from 'lucide-react'
 
 const features = [
   {
@@ -33,6 +33,14 @@ const features = [
     color: 'var(--color-purple)',
     glow: 'var(--color-purple-glow)',
   },
+  {
+    icon: ShieldCheck,
+    title: 'Permissions management',
+    description:
+      'Configure Claude Code permissions right from the dashboard. Set default modes, manage allow and deny rules — no hand-editing JSON files.',
+    color: 'var(--color-brand)',
+    glow: 'var(--color-brand-glow)',
+  },
 ]
 
 export default function FeaturesSection() {
@@ -47,10 +55,10 @@ export default function FeaturesSection() {
         </div>
 
         <div className="grid sm:grid-cols-2 gap-6">
-          {features.map((f) => (
+          {features.map((f, i) => (
             <div
               key={f.title}
-              className="rounded-xl border border-neutral-800 bg-neutral-900/30 p-6 hover:border-neutral-700 transition-colors"
+              className={`rounded-xl border border-neutral-800 bg-neutral-900/30 p-6 hover:border-neutral-700 transition-colors${i === features.length - 1 ? ' sm:col-span-2' : ''}`}
             >
               <div
                 className="w-10 h-10 rounded-lg flex items-center justify-center mb-4"

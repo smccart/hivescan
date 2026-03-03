@@ -43,6 +43,27 @@ function resolveClaude() {
 const SHELL_PATH = resolveShellPath()
 const CLAUDE_BIN = resolveClaude()
 
+// ── Waiting-state detection ──────────────────────────────────────────────────
+
+function stripAnsi(str) {
+  return str.replace(/\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07]*\x07|[()][A-Z0-9])/g, '')
+}
+
+function detectWaiting(buffer) {
+  const raw = buffer.slice(-5).join('')
+  const tail = raw.slice(-2000)
+  const clean = stripAnsi(tail).replace(/\r/g, '').trim()
+  const lines = clean.split('\n').filter(l => l.trim()).slice(-8)
+  if (lines.length === 0) return false
+  const text = lines.join('\n')
+
+  if (/\?\s*$/m.test(text)) return true
+  if (/\by[/|]n\b/i.test(text)) return true
+  if (/\ballow\b/i.test(text)) return true
+  if (/\bdeny\b/i.test(text)) return true
+  return false
+}
+
 // ── Buffer persistence ─────────────────────────────────────────────────────────
 
 function makeBufferHelpers(dataDir) {
@@ -97,6 +118,7 @@ export function startServer(config, repoRoot) {
       buffer: buf.loadBuffer(name),
       clients: new Set(),
       active: false,
+      waiting: false,
       activityTimer: null,
       saveTimer: null,
     }
@@ -156,12 +178,15 @@ export function startServer(config, repoRoot) {
 
       if (!session.active) {
         session.active = true
-        broadcast(session, { type: 'activity', active: true })
+        session.waiting = false
+        broadcast(session, { type: 'activity', active: true, waiting: false })
       }
       clearTimeout(session.activityTimer)
       session.activityTimer = setTimeout(() => {
         session.active = false
-        broadcast(session, { type: 'activity', active: false })
+        const waiting = detectWaiting(session.buffer)
+        session.waiting = waiting
+        broadcast(session, { type: 'activity', active: false, waiting })
       }, 1500)
     })
 
@@ -220,6 +245,7 @@ export function startServer(config, repoRoot) {
         ...cfg,
         running: !!sessions[name].pty,
         active: sessions[name].active,
+        waiting: sessions[name].waiting,
       }
     }
     // Include order so the UI can sort correctly
@@ -303,7 +329,7 @@ export function startServer(config, repoRoot) {
     }
 
     ws.send(JSON.stringify({ type: 'status', running: !!session.pty }))
-    ws.send(JSON.stringify({ type: 'activity', active: session.active }))
+    ws.send(JSON.stringify({ type: 'activity', active: session.active, waiting: session.waiting }))
 
     ws.on('message', (raw) => {
       try {

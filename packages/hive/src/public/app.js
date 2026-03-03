@@ -116,6 +116,7 @@ async function initRepo(port) {
   const agentStatus = {}
   const agentActivity = {}
   const agentWasActive = {}
+  const agentWaiting = {}
 
   for (const name of agentOrder) {
     const a = agentData.agents[name]
@@ -124,6 +125,7 @@ async function initRepo(port) {
     agentStatus[name] = a.running
     agentActivity[name] = a.active ?? false
     agentWasActive[name] = false
+    agentWaiting[name] = a.waiting ?? false
   }
 
   repoState[port] = {
@@ -136,6 +138,7 @@ async function initRepo(port) {
     agentStatus,
     agentActivity,
     agentWasActive,
+    agentWaiting,
     terminals: {},
     activeAgent: null,
     model: modelData.model,
@@ -331,11 +334,13 @@ function updateSidebarItem(port, name) {
   if (!item || !repo) return
   const running = repo.agentStatus[name]
   const active  = repo.agentActivity[name]
+  const waiting = repo.agentWaiting[name]
   const dot    = item.querySelector('.agent-color-dot')
   const status = item.querySelector('.agent-status')
   if (dot) {
     dot.classList.toggle('running', running)
     dot.classList.toggle('thinking', running && active)
+    dot.classList.toggle('waiting', running && !active && waiting)
   }
   if (status) status.classList.toggle('running', running)
 
@@ -363,7 +368,10 @@ function selectAgent(name) {
 
   headerColorBar.style.background = agent.color
   headerDot.style.background = agent.color
-  headerDot.classList.toggle('thinking', repo.agentActivity[name] ?? false)
+  const isActive = repo.agentActivity[name] ?? false
+  const isWaiting = repo.agentWaiting[name] ?? false
+  headerDot.classList.toggle('thinking', isActive)
+  headerDot.classList.toggle('waiting', !isActive && isWaiting)
   headerName.textContent = agent.label
 
   if (agent.port) {
@@ -475,13 +483,20 @@ function connectWS(port, name, term, wsRef, skipBuffer = false) {
       } else if (msg.type === 'activity') {
         const prev = repo.agentWasActive[name]
         repo.agentActivity[name] = msg.active
+        repo.agentWaiting[name] = msg.waiting ?? false
         repo.agentWasActive[name] = msg.active
         updateSidebarItem(port, name)
         if (port === activeRepo && name === repo.activeAgent) {
           headerDot.classList.toggle('thinking', msg.active)
+          headerDot.classList.toggle('waiting', !msg.active && (msg.waiting ?? false))
         }
         if (prev && !msg.active && repo.agentStatus[name]) {
-          maybeNotify(port, name, `${repo.agents[name]?.label ?? name} finished`, 'Claude is done responding')
+          const label = repo.agents[name]?.label ?? name
+          if (msg.waiting) {
+            maybeNotify(port, name, `${label} needs input`, 'Waiting for your response')
+          } else {
+            maybeNotify(port, name, `${label} finished`, 'Claude is done responding')
+          }
         }
       }
     } catch { /* ignore */ }

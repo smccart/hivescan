@@ -98,6 +98,51 @@ curl -X POST http://localhost:4199/api/model \
 
 ---
 
+### GET /api/permissions
+
+Returns the current Claude Code permissions from `.claude/settings.json`. If the file doesn't exist, returns defaults.
+
+**Response:**
+
+```json
+{
+  "defaultMode": "acceptEdits",
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(git diff *)",
+      "Read"
+    ],
+    "deny": [
+      "Bash(git push *)",
+      "Read(.env*)"
+    ]
+  }
+}
+```
+
+---
+
+### POST /api/permissions
+
+Writes updated permission settings to `.claude/settings.json`. Creates the `.claude/` directory if it doesn't exist.
+
+```bash
+curl -X POST http://localhost:4199/api/permissions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "defaultMode": "acceptEdits",
+    "permissions": {
+      "allow": ["Bash(npm run *)", "Read"],
+      "deny": ["Bash(rm -rf *)"]
+    }
+  }'
+```
+
+**Response:** `{ "ok": true }`
+
+---
+
 ## WebSocket
 
 Connect to `/ws?agent=<name>` to stream terminal I/O for a specific agent.

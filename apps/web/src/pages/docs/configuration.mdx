@@ -82,3 +82,47 @@ Each agent's buffer is capped at 50 KB (rolling — oldest output is trimmed fir
 ## Environment
 
 HiveAgents resolves Claude's path and your login-shell `PATH` automatically, so tools like `nvm`, `fnm`, and `mise` work as expected inside the spawned agent processes.
+
+## Claude Code permissions
+
+HiveAgents can manage your project's `.claude/settings.json` file, which controls how Claude Code handles tool permissions. You can edit this from the dashboard UI (click **Permissions** in the sidebar) or by hand.
+
+```json
+{
+  "defaultMode": "acceptEdits",
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(git diff *)",
+      "Bash(git commit *)",
+      "Read"
+    ],
+    "deny": [
+      "Bash(git push *)",
+      "Bash(rm -rf *)",
+      "Read(.env*)"
+    ]
+  }
+}
+```
+
+### Default modes
+
+| Mode | Behavior |
+|------|----------|
+| `default` | Prompts for each tool on first use |
+| `acceptEdits` | Auto-approves file edits, prompts for shell commands |
+| `plan` | Read-only — analyze but don't modify |
+| `dontAsk` | Auto-denies unless listed in allow rules |
+| `bypassPermissions` | Skips all prompts (isolated environments only) |
+
+### Rule syntax
+
+Rules follow the pattern `Tool(pattern)` where `Tool` is `Bash`, `Edit`, `Read`, or `Write`, and `pattern` is a glob:
+
+- `Bash(npm run *)` — matches any `npm run` command
+- `Edit(/src/**)` — matches edits to any file under `src/`
+- `Read` — matches all file reads (no pattern = match all)
+- `Read(.env*)` — matches reads of `.env`, `.env.local`, etc.
+
+Deny rules take priority over allow rules.

@@ -1,6 +1,6 @@
 ---
 title: Using HiveAgents
-description: Keyboard shortcuts, model switching, tips and tricks.
+description: Keyboard shortcuts, model switching, permissions, and tips.
 ---
 
 # Using HiveAgents
@@ -54,6 +54,41 @@ Available models:
 - Opus 4.6 — most capable, best for complex tasks
 - Sonnet 4.6 — balanced capability and speed
 - Haiku 4.5 — fastest, best for lightweight tasks
+
+## Permissions management
+
+Click the **Permissions** button (gear icon) in the sidebar footer to open the permissions modal. This reads and writes your project's `.claude/settings.json` file, which controls how Claude Code handles tool approvals.
+
+### Default mode
+
+The **Default Mode** dropdown sets the overall permission behavior:
+
+| Mode | Behavior |
+|------|----------|
+| `default` | Prompts for permission on first use of each tool |
+| `acceptEdits` | Auto-approves all file edits, prompts for shell commands |
+| `plan` | Read-only — Claude can analyze but not modify files |
+| `dontAsk` | Auto-denies tools unless pre-approved in allow rules |
+| `bypassPermissions` | Skips all permission prompts (use in isolated environments only) |
+
+### Allow rules
+
+Rules that auto-approve specific tools without prompting. Examples:
+
+- `Bash(npm run *)` — allow any npm script
+- `Bash(git diff *)` — allow git diff commands
+- `Read` — allow all file reads
+- `Edit(/src/**)` — allow edits to files under `src/`
+
+### Deny rules
+
+Rules that always block specific tools, overriding allow rules. Examples:
+
+- `Bash(git push *)` — prevent pushes
+- `Bash(rm -rf *)` — prevent destructive deletes
+- `Read(.env*)` — block reading environment files
+
+Click **Save** to write changes to `.claude/settings.json`. Changes take effect on the next Claude Code session.
 
 ## Session persistence
 
