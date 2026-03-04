@@ -12,7 +12,7 @@
   "scripts": {
     "start": "node src/cli.js",
     "dev": "node --watch src/cli.js",
-    "postinstall": "node -e \"const{chmodSync:c,existsSync:e}=require('fs'),p=require('path').join(__dirname,'node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper');e(p)&&c(p,'755')\""
+    "postinstall": "node src/postinstall.cjs"
   },
   "keywords": [
     "claude",
@@ -35,6 +35,10 @@
     "node-pty": "^1.0.0",
     "ws": "^8.18.0"
   },
+  "os": [
+    "darwin",
+    "linux"
+  ],
   "engines": {
     "node": ">=18"
   }

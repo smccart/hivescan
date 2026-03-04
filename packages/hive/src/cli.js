@@ -9,7 +9,7 @@ import { exec } from 'node:child_process'
 // ── CLI flags ───────────────────────────────────────────────────────────────
 
 function parseArgs(argv) {
-  const args = { port: null, poll: null, dirs: [] }
+  const args = { port: null, poll: null, dirs: [], noOpen: false }
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--help' || arg === '-h') {
@@ -37,6 +37,9 @@ function parseArgs(argv) {
     if ((arg === '--dir' || arg === '-d') && argv[i + 1]) {
       args.dirs.push(resolve(argv[++i]))
     }
+    if (arg === '--no-open') {
+      args.noOpen = true
+    }
   }
   return args
 }
@@ -61,6 +64,7 @@ function printHelp() {
     -d, --dir <path>         Directory to scan for projects (repeatable)
     -p, --port <number>      Server port (default: 4269)
         --poll <seconds>     Port scan interval (default: 5)
+        --no-open            Don't open the browser automatically
     -v, --version            Show version
     -h, --help               Show this help
 
@@ -85,6 +89,23 @@ function getVersion() {
 
 function printVersion() {
   console.log(getVersion())
+}
+
+// ── Update check ─────────────────────────────────────────────────────────────
+
+async function checkForUpdate() {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+    const { name, version: current } = pkg
+    const res = await fetch(`https://registry.npmjs.org/${name}/latest`, {
+      signal: AbortSignal.timeout(3000),
+    })
+    const { version: latest } = await res.json()
+    if (latest && latest !== current) {
+      console.log(`  Update available: ${current} → ${latest}`)
+      console.log(`  Run: npm update -g ${name}\n`)
+    }
+  } catch { /* silent — don't block startup */ }
 }
 
 // ── Port helpers ──────────────────────────────────────────────────────────────
@@ -164,7 +185,8 @@ console.log(`  Scanning: ${scanDirs.join(', ')}`)
 
 try {
   const { startServer } = await import('./server.js')
-  startServer({ port, pollInterval, scanDirs, dataDir })
+  startServer({ port, pollInterval, scanDirs, dataDir, noOpen: args.noOpen })
+  checkForUpdate()
 } catch (err) {
   console.error(`\n  Error: ${err.message}\n`)
   process.exit(1)

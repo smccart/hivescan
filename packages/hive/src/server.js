@@ -92,7 +92,7 @@ function makeBufferHelpers(dataDir) {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export function startServer({ port, pollInterval, scanDirs, dataDir }) {
+export function startServer({ port, pollInterval, scanDirs, dataDir, noOpen }) {
   const MODELS = [
     { id: 'claude-opus-4-6',           label: 'Opus 4.6' },
     { id: 'claude-sonnet-4-6',         label: 'Sonnet 4.6' },
@@ -459,10 +459,12 @@ export function startServer({ port, pollInterval, scanDirs, dataDir }) {
     console.log(`  ${count} project(s) found, scanning ports every ${pollInterval / 1000}s...\n`)
     watcher.start(pollInterval)
 
-    // Open browser
-    const url = `http://localhost:${port}`
-    const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
-    exec(`${cmd} ${url}`)
+    // Open browser unless --no-open was passed
+    if (!noOpen) {
+      const url = `http://localhost:${port}`
+      const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
+      exec(`${cmd} ${url}`)
+    }
   })
 
   function shutdown() {
