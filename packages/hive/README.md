@@ -1,21 +1,21 @@
-# hive-agents
+# hivescan
 
 Web-based terminal dashboard for managing multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents across your projects.
 
 ## Quick Start
 
 ```bash
-npx hive-agents
+npx hivescan
 ```
 
 Or install globally:
 
 ```bash
-npm install -g hive-agents
-hive
+npm install -g hivescan
+hivescan
 ```
 
-Hive will scan your current directory for projects, start a local dashboard, and open it in your browser.
+HiveScan will scan your current directory for projects, start a local dashboard, and open it in your browser.
 
 ## Requirements
 
@@ -26,12 +26,12 @@ Hive will scan your current directory for projects, start a local dashboard, and
 ## Usage
 
 ```bash
-hive                          # Scan current directory for projects
-hive --dir ~/Sites            # Scan a specific directory
-hive --dir ~/work --dir ~/oss # Scan multiple directories
-hive --port 5000              # Use a custom port (default: 4269)
-hive --poll 10                # Port scan interval in seconds (default: 5)
-hive --no-open                # Don't open browser automatically
+hivescan                          # Scan current directory for projects
+hivescan --dir ~/Sites            # Scan a specific directory
+hivescan --dir ~/work --dir ~/oss # Scan multiple directories
+hivescan --port 5000              # Use a custom port (default: 4269)
+hivescan --poll 10                # Port scan interval in seconds (default: 5)
+hivescan --no-open                # Don't open browser automatically
 ```
 
 ## How It Works

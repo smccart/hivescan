@@ -1,10 +1,10 @@
 {
-  "name": "hive-agents",
+  "name": "hivescan",
   "version": "0.1.0",
   "description": "Web-based terminal dashboard for managing Claude Code agents in a monorepo",
   "type": "module",
   "bin": {
-    "hive": "./src/cli.js"
+    "hivescan": "src/cli.js"
   },
   "files": [
     "src/"
@@ -27,9 +27,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/smccart/hive"
+    "url": "git+https://github.com/smccart/hive.git"
   },
-  "homepage": "https://hive-agents.dev",
+  "homepage": "https://hivescan.dev",
   "dependencies": {
     "express": "^4.19.0",
     "node-pty": "^1.0.0",

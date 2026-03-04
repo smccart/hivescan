@@ -47,26 +47,26 @@ function parseArgs(argv) {
 function printHelp() {
   const v = getVersion()
   console.log(`
-  HiveAgents v${v}
+  HiveScan v${v}
   Centralized dashboard for managing Claude Code agents across projects
 
-  Hive automatically detects running dev servers on your system,
+  HiveScan automatically detects running dev servers on your system,
   identifies which project they belong to, and lets you manage
   Claude Code agents for each one from a single UI.
 
   Usage:
-    hive                     Start Hive (scans current directory for projects)
-    hive --dir ~/Sites       Scan a specific directory for projects
-    hive --port 5000         Override the default UI port (4269)
-    hive --poll 10           Set port scan interval in seconds (default: 5)
+    hivescan                     Start HiveScan (scans current directory for projects)
+    hivescan --dir ~/Sites       Scan a specific directory for projects
+    hivescan --port 5000         Override the default UI port (4269)
+    hivescan --poll 10           Set port scan interval in seconds (default: 5)
 
   Options:
-    -d, --dir <path>         Directory to scan for projects (repeatable)
-    -p, --port <number>      Server port (default: 4269)
-        --poll <seconds>     Port scan interval (default: 5)
-        --no-open            Don't open the browser automatically
-    -v, --version            Show version
-    -h, --help               Show this help
+    -d, --dir <path>             Directory to scan for projects (repeatable)
+    -p, --port <number>          Server port (default: 4269)
+        --poll <seconds>         Port scan interval (default: 5)
+        --no-open                Don't open the browser automatically
+    -v, --version                Show version
+    -h, --help                   Show this help
 
   How it works:
     1. Scans directory children for projects (package.json or .git)
