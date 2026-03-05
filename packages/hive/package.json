@@ -29,6 +29,9 @@
     "type": "git",
     "url": "git+https://github.com/smccart/hive.git"
   },
+  "bugs": {
+    "url": "https://github.com/smccart/hive/issues"
+  },
   "homepage": "https://hivescan.dev",
   "dependencies": {
     "express": "^4.19.0",
