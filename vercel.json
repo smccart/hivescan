@@ -1,6 +1,6 @@
 {
-  "buildCommand": "pnpm turbo build --filter=web",
-  "outputDirectory": "apps/web/dist",
+  "buildCommand": "pnpm turbo build --filter=web && cp -r apps/web/dist .",
+  "outputDirectory": "dist",
   "installCommand": "pnpm install",
   "framework": null,
   "rewrites": [
