@@ -44,10 +44,11 @@ function getTermTheme() {
 const baseUrl = `${location.protocol}//${location.host}`
 const wsBase = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`
 
-// { [projectId]: { id, name, root, ports, color, running, active, waiting, terminal } }
+// { [projectId]: { id, name, root, ports, color, group, groupId, agents: { [sessionId]: agentState } } }
 const projects = {}
 let projectOrder = []   // ordered list of project IDs
-let activeProject = null
+let activeProject = null  // currently selected projectId
+let activeSession = null  // currently selected sessionId (projectId:idx)
 
 let currentModel = ''
 let models = []
@@ -94,7 +95,7 @@ function updateTabAttention() {
   const waitingNames = []
   for (const id of projectOrder) {
     const p = projects[id]
-    if (p?.waiting) waitingNames.push(p.name)
+    if (p && hasWaitingAgent(id)) waitingNames.push(p.name)
   }
 
   if (waitingNames.length > 0 && document.hidden) {
@@ -112,8 +113,9 @@ document.addEventListener('visibilitychange', () => {
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 
-const runningTabsEl  = document.getElementById('running-tabs')
-const agentTabsEl    = document.getElementById('agent-tabs')
+const tier1El        = document.getElementById('tier1-tabs')
+const tier2El        = document.getElementById('tier2-tabs')
+const tier3El        = document.getElementById('tier3-tabs')
 const agentListEl    = document.getElementById('agent-list')
 const termContainer  = document.getElementById('terminal-container')
 const headerColorBar = document.getElementById('header-color-bar')
@@ -183,8 +185,11 @@ function updateAllTerminalThemes() {
   const termTheme = getTermTheme()
   for (const id of projectOrder) {
     const p = projects[id]
-    if (p?.terminal?.term) {
-      p.terminal.term.options.theme = termTheme
+    if (!p) continue
+    for (const agent of Object.values(p.agents || {})) {
+      if (agent.terminal?.term) {
+        agent.terminal.term.options.theme = termTheme
+      }
     }
   }
 }
@@ -269,34 +274,88 @@ function updateProjects(projectList) {
 
   // Add or update projects
   for (const p of projectList) {
+    const incomingAgents = p.agents || []
+
     if (projects[p.id]) {
-      // Update mutable fields
       const existing = projects[p.id]
-      const wasActive = existing.active
       existing.ports = p.ports
-      existing.running = p.running
-      existing.active = p.active
-      existing.waiting = p.waiting
       existing.color = p.color
+
+      // Sync agents
+      const incomingSessionIds = new Set(incomingAgents.map(a => a.sessionId))
+
+      // Update or add agents
+      for (const a of incomingAgents) {
+        if (existing.agents[a.sessionId]) {
+          const ea = existing.agents[a.sessionId]
+          const wasActive = ea.active
+          ea.running = a.running
+          ea.active = a.active
+          ea.waiting = a.waiting
+
+          // Notify on state transitions
+          if (wasActive && !a.active && a.running) {
+            if (a.waiting) {
+              maybeNotify(p.id, `${p.name} needs input`, 'Waiting for your response')
+            } else {
+              maybeNotify(p.id, `${p.name} finished`, 'Claude is done responding')
+            }
+          }
+        } else {
+          existing.agents[a.sessionId] = {
+            sessionId: a.sessionId,
+            instanceIdx: a.instanceIdx,
+            running: a.running,
+            active: a.active,
+            waiting: a.waiting,
+            terminal: null,
+          }
+        }
+      }
+
+      // Remove gone agents
+      for (const sid of Object.keys(existing.agents)) {
+        if (!incomingSessionIds.has(sid)) {
+          const agent = existing.agents[sid]
+          if (agent.terminal) {
+            agent.terminal.resizeObserver.disconnect()
+            agent.terminal.ws.current?.close()
+            agent.terminal.div.remove()
+          }
+          delete existing.agents[sid]
+          if (activeSession === sid) {
+            activeSession = null
+          }
+        }
+      }
+
       updateSidebarItem(p.id)
       if (p.id === activeProject) {
         updateHeader()
         if (previewOpen) updatePreviewContent()
       }
-
-      // Notify on state transitions
-      if (wasActive && !p.active && existing.running) {
-        if (p.waiting) {
-          maybeNotify(p.id, `${p.name} needs input`, 'Waiting for your response')
-        } else {
-          maybeNotify(p.id, `${p.name} finished`, 'Claude is done responding')
-        }
-      }
     } else {
       // New project
+      const agentsObj = {}
+      for (const a of incomingAgents) {
+        agentsObj[a.sessionId] = {
+          sessionId: a.sessionId,
+          instanceIdx: a.instanceIdx,
+          running: a.running,
+          active: a.active,
+          waiting: a.waiting,
+          terminal: null,
+        }
+      }
       projects[p.id] = {
-        ...p,
-        terminal: null,
+        id: p.id,
+        name: p.name,
+        root: p.root,
+        ports: p.ports,
+        color: p.color,
+        group: p.group,
+        groupId: p.groupId,
+        agents: agentsObj,
       }
       if (!projectOrder.includes(p.id)) projectOrder.push(p.id)
     }
@@ -306,16 +365,21 @@ function updateProjects(projectList) {
   for (const id of [...projectOrder]) {
     if (!newIds.has(id)) {
       const p = projects[id]
-      if (p?.terminal) {
-        p.terminal.resizeObserver.disconnect()
-        p.terminal.ws.current?.close()
-        p.terminal.div.remove()
+      if (p) {
+        for (const agent of Object.values(p.agents || {})) {
+          if (agent.terminal) {
+            agent.terminal.resizeObserver.disconnect()
+            agent.terminal.ws.current?.close()
+            agent.terminal.div.remove()
+          }
+        }
       }
       delete projects[id]
       projectOrder = projectOrder.filter(x => x !== id)
 
       if (activeProject === id) {
         activeProject = null
+        activeSession = null
         if (projectOrder.length > 0) selectProject(projectOrder[0])
         else {
           headerName.textContent = 'No projects detected'
@@ -328,6 +392,39 @@ function updateProjects(projectList) {
   renderSidebar()
   renderTabs()
   updateTabAttention()
+}
+
+// ── Agent helpers ──────────────────────────────────────────────────────────
+
+function getProjectAgents(projectId) {
+  const p = projects[projectId]
+  if (!p) return []
+  return Object.values(p.agents).sort((a, b) => a.instanceIdx - b.instanceIdx)
+}
+
+function hasRunningAgent(projectId) {
+  const p = projects[projectId]
+  if (!p) return false
+  // Check this project's agents
+  if (Object.values(p.agents).some(a => a.running)) return true
+  // Check children (monorepo)
+  for (const id of projectOrder) {
+    if (projects[id]?.groupId === projectId) {
+      if (Object.values(projects[id].agents).some(a => a.running)) return true
+    }
+  }
+  return false
+}
+
+function hasWaitingAgent(projectId) {
+  const p = projects[projectId]
+  if (!p) return false
+  return Object.values(p.agents).some(a => a.running && a.waiting)
+}
+
+function getActiveAgent() {
+  if (!activeSession || !activeProject) return null
+  return projects[activeProject]?.agents[activeSession] || null
 }
 
 // ── Model selector ───────────────────────────────────────────────────────────
@@ -352,52 +449,88 @@ modelSelect.addEventListener('change', () => {
   })
 })
 
-// ── Agent tabs ──────────────────────────────────────────────────────────────
-
-function renderRunningTabs() {
-  runningTabsEl.innerHTML = ''
-  for (const id of projectOrder) {
-    const p = projects[id]
-    if (!p || !p.running) continue
-    runningTabsEl.appendChild(buildTab(p))
-  }
-}
-
-function renderGroupTabs() {
-  agentTabsEl.innerHTML = ''
-  const active = projects[activeProject]
-  if (!active) return
-
-  // Only show group tabs when inside a monorepo
-  const groupId = active.groupId || null
-  if (!groupId) return
-
-  for (const id of projectOrder) {
-    const p = projects[id]
-    if (!p) continue
-    const pGroup = p.groupId || null
-    if (pGroup !== groupId) continue
-    const tab = buildTab(p)
-    if (!p.running) tab.classList.add('dimmed')
-    agentTabsEl.appendChild(tab)
-  }
-}
+// ── Tier tabs ───────────────────────────────────────────────────────────────
 
 function renderTabs() {
-  renderRunningTabs()
-  renderGroupTabs()
+  renderTier1Tabs()
+  renderTier2Tabs()
+  renderTier3Tabs()
 }
 
-function buildTab(p) {
+function renderTier1Tabs() {
+  tier1El.innerHTML = ''
+  // Show top-level projects/monorepo roots with running agents
+  for (const id of projectOrder) {
+    const p = projects[id]
+    if (!p || p.groupId) continue  // skip monorepo children
+    if (!hasRunningAgent(id)) continue
+    tier1El.appendChild(buildProjectTab(p))
+  }
+}
+
+function renderTier2Tabs() {
+  tier2El.innerHTML = ''
+  if (!activeProject) return
+  const p = projects[activeProject]
+  if (!p) return
+
+  // Find the top-level project for context
+  const topId = p.groupId || p.id
+  const top = projects[topId]
+  if (!top) return
+
+  const isMonorepo = projectOrder.some(id => projects[id]?.groupId === topId)
+
+  if (isMonorepo) {
+    // Show child packages
+    for (const id of projectOrder) {
+      const child = projects[id]
+      if (!child || child.groupId !== topId) continue
+      const tab = buildPackageTab(child)
+      tier2El.appendChild(tab)
+    }
+  } else {
+    // Standalone project: tier 2 is agent instances
+    renderAgentInstanceTabs(tier2El, topId)
+  }
+}
+
+function renderTier3Tabs() {
+  tier3El.innerHTML = ''
+  if (!activeProject) return
+  const p = projects[activeProject]
+  if (!p || !p.groupId) return  // only for monorepo children
+  renderAgentInstanceTabs(tier3El, activeProject)
+}
+
+function renderAgentInstanceTabs(container, projectId) {
+  const agentList = getProjectAgents(projectId)
+  const p = projects[projectId]
+  if (!p) return
+
+  for (const agent of agentList) {
+    container.appendChild(buildAgentTab(agent, p))
+  }
+
+  // "+" button to spawn new agent
+  const addBtn = document.createElement('button')
+  addBtn.className = 'agent-add-btn'
+  addBtn.textContent = '+'
+  addBtn.title = 'New agent instance'
+  addBtn.addEventListener('click', () => spawnNewAgent(projectId))
+  container.appendChild(addBtn)
+}
+
+function buildProjectTab(p) {
   const tab = document.createElement('button')
   tab.className = 'agent-tab'
   tab.dataset.id = p.id
   tab.style.setProperty('--tab-color', p.color)
 
-  if (p.id === activeProject) tab.classList.add('active')
-  if (p.running) tab.classList.add('running')
-  if (p.running && p.active) tab.classList.add('thinking')
-  if (p.running && !p.active && p.waiting) tab.classList.add('waiting')
+  const topId = projects[activeProject]?.groupId || activeProject
+  if (p.id === topId) tab.classList.add('active')
+  if (hasRunningAgent(p.id)) tab.classList.add('running')
+  if (hasWaitingAgent(p.id)) tab.classList.add('waiting')
 
   const dot = document.createElement('span')
   dot.className = 'agent-tab-dot'
@@ -406,10 +539,6 @@ function buildTab(p) {
   const name = document.createElement('span')
   name.className = 'agent-tab-name'
   name.textContent = p.name
-
-  const badge = document.createElement('span')
-  badge.className = 'agent-tab-badge'
-  badge.textContent = '?'
 
   tab.append(dot, name)
 
@@ -420,30 +549,99 @@ function buildTab(p) {
     tab.appendChild(port)
   }
 
-  tab.appendChild(badge)
+  tab.addEventListener('click', () => selectTier1(p.id))
+  return tab
+}
+
+function buildPackageTab(p) {
+  const tab = document.createElement('button')
+  tab.className = 'agent-tab'
+  tab.dataset.id = p.id
+  tab.style.setProperty('--tab-color', p.color)
+
+  if (p.id === activeProject) tab.classList.add('active')
+
+  const running = Object.values(p.agents).some(a => a.running)
+  const waiting = Object.values(p.agents).some(a => a.running && a.waiting)
+  const thinking = Object.values(p.agents).some(a => a.running && a.active)
+
+  if (running) tab.classList.add('running')
+  if (thinking) tab.classList.add('thinking')
+  if (waiting && !thinking) tab.classList.add('waiting')
+  if (!running) tab.classList.add('dimmed')
+
+  const dot = document.createElement('span')
+  dot.className = 'agent-tab-dot'
+  dot.style.background = p.color
+
+  const name = document.createElement('span')
+  name.className = 'agent-tab-name'
+  name.textContent = p.name
+
+  tab.append(dot, name)
+
+  if (p.ports.length > 0) {
+    const port = document.createElement('span')
+    port.className = 'agent-tab-port'
+    port.textContent = p.ports.map(pt => `:${pt}`).join(' ')
+    tab.appendChild(port)
+  }
+
   tab.addEventListener('click', () => selectProject(p.id))
   return tab
 }
 
-function updateTab(id) {
-  const p = projects[id]
-  if (!p) return
+function buildAgentTab(agent, p) {
+  const tab = document.createElement('button')
+  tab.className = 'agent-tab agent-instance-tab'
+  tab.dataset.session = agent.sessionId
+  tab.style.setProperty('--tab-color', p.color)
 
-  for (const container of [runningTabsEl, agentTabsEl]) {
-    const tab = container.querySelector(`[data-id="${id}"]`)
-    if (!tab) continue
-    tab.classList.toggle('active', p.id === activeProject)
-    tab.classList.toggle('running', p.running)
-    tab.classList.toggle('thinking', p.running && p.active)
-    tab.classList.toggle('waiting', p.running && !p.active && p.waiting)
-    tab.classList.toggle('dimmed', !p.running && container === agentTabsEl)
-  }
+  if (agent.sessionId === activeSession) tab.classList.add('active')
+  if (agent.running) tab.classList.add('running')
+  if (agent.running && agent.active) tab.classList.add('thinking')
+  if (agent.running && !agent.active && agent.waiting) tab.classList.add('waiting')
+
+  const dot = document.createElement('span')
+  dot.className = 'agent-tab-dot'
+  dot.style.background = p.color
+
+  const name = document.createElement('span')
+  name.className = 'agent-tab-name'
+  name.textContent = `Agent ${agent.instanceIdx + 1}`
+
+  const badge = document.createElement('span')
+  badge.className = 'agent-tab-badge'
+  badge.textContent = '?'
+
+  tab.append(dot, name, badge)
+
+  // Close button
+  const closeBtn = document.createElement('span')
+  closeBtn.className = 'agent-tab-close'
+  closeBtn.textContent = '\u00d7'
+  closeBtn.title = 'Remove agent'
+  closeBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    if (agent.running) {
+      if (!window.confirm('This agent is running. Stop and remove it?')) return
+    }
+    removeAgentInstance(agent.sessionId)
+  })
+  tab.appendChild(closeBtn)
+
+  tab.addEventListener('click', () => selectSession(agent.sessionId))
+  return tab
 }
 
 function updateAllTabsActiveState() {
-  for (const container of [runningTabsEl, agentTabsEl]) {
+  for (const container of [tier1El, tier2El, tier3El]) {
     container.querySelectorAll('.agent-tab').forEach(tab => {
-      tab.classList.toggle('active', tab.dataset.id === activeProject)
+      if (tab.dataset.session) {
+        tab.classList.toggle('active', tab.dataset.session === activeSession)
+      } else {
+        tab.classList.toggle('active', tab.dataset.id === activeProject)
+      }
     })
   }
 }
@@ -600,7 +798,7 @@ function buildGroupHeader(parent, children, isHidden) {
 
     header.append(name, eye)
     header.addEventListener('click', () => {
-      selectProject(parent.id)
+      selectTier1(parent.id)
       if (collapsedGroups.has(parent.id)) {
         collapsedGroups.delete(parent.id)
       } else {
@@ -638,11 +836,15 @@ function buildProjectItem(p, isChild, isHidden) {
   item.dataset.id = p.id
   item.style.setProperty('--agent-color', p.color)
 
+  const running = hasRunningAgent(p.id)
+  const thinking = Object.values(p.agents).some(a => a.running && a.active)
+  const waiting = Object.values(p.agents).some(a => a.running && !a.active && a.waiting)
+
   const dot = document.createElement('span')
   dot.className = 'agent-color-dot'
-  if (p.running) dot.classList.add('running')
-  if (p.running && p.active) dot.classList.add('thinking')
-  if (p.running && !p.active && p.waiting) dot.classList.add('waiting')
+  if (running) dot.classList.add('running')
+  if (thinking) dot.classList.add('thinking')
+  if (waiting && !thinking) dot.classList.add('waiting')
   dot.style.background = p.color
 
   const info = document.createElement('span')
@@ -652,11 +854,15 @@ function buildProjectItem(p, isChild, isHidden) {
   label.textContent = p.name
   const meta = document.createElement('span')
   meta.className = 'agent-meta'
-  meta.textContent = p.ports.length > 0 ? p.ports.map(port => `:${port}`).join(' ') : ''
+  const agentCount = Object.keys(p.agents).length
+  const metaParts = []
+  if (p.ports.length > 0) metaParts.push(p.ports.map(port => `:${port}`).join(' '))
+  if (agentCount > 1) metaParts.push(`${agentCount} agents`)
+  meta.textContent = metaParts.join(' · ')
   info.append(label, meta)
 
   const status = document.createElement('span')
-  status.className = 'agent-status' + (p.running ? ' running' : '')
+  status.className = 'agent-status' + (running ? ' running' : '')
 
   if (!isChild) {
     const eye = buildVisibilityToggle(p.id)
@@ -674,69 +880,148 @@ function updateSidebarItem(id) {
   const p = projects[id]
   if (!p) return
 
+  const running = hasRunningAgent(id)
+  const thinking = Object.values(p.agents).some(a => a.running && a.active)
+  const waiting = Object.values(p.agents).some(a => a.running && !a.active && a.waiting)
+
   const dot = item.querySelector('.agent-color-dot')
   const status = item.querySelector('.agent-status')
 
   if (dot) {
-    dot.classList.toggle('running', p.running)
-    dot.classList.toggle('thinking', p.running && p.active)
-    dot.classList.toggle('waiting', p.running && !p.active && p.waiting)
+    dot.classList.toggle('running', running)
+    dot.classList.toggle('thinking', thinking)
+    dot.classList.toggle('waiting', waiting && !thinking)
   }
-  if (status) status.classList.toggle('running', p.running)
+  if (status) status.classList.toggle('running', running)
 
-  if (p.terminal) p.terminal.div.classList.toggle('stopped', !p.running)
-
-  updateTab(id)
+  // Update terminal stopped state for active agent
+  const agent = getActiveAgent()
+  if (agent?.terminal) agent.terminal.div.classList.toggle('stopped', !agent.running)
 }
 
-// ── Select project ───────────────────────────────────────────────────────────
+// ── Selection ───────────────────────────────────────────────────────────────
+
+function selectTier1(projectId) {
+  const p = projects[projectId]
+  if (!p) return
+  const isMonorepo = projectOrder.some(id => projects[id]?.groupId === projectId)
+
+  if (isMonorepo) {
+    // Select first child package
+    const firstChild = projectOrder.find(id => projects[id]?.groupId === projectId)
+    if (firstChild) selectProject(firstChild)
+    else selectProject(projectId)
+  } else {
+    selectProject(projectId)
+  }
+}
 
 function selectProject(id) {
   const p = projects[id]
   if (!p) return
 
   // Deactivate previous terminal
-  if (activeProject && projects[activeProject]?.terminal) {
-    projects[activeProject].terminal.div.classList.remove('active')
+  const prevAgent = getActiveAgent()
+  if (prevAgent?.terminal) {
+    prevAgent.terminal.div.classList.remove('active')
   }
 
   activeProject = id
+
+  // Select first agent, or null
+  const agentList = getProjectAgents(id)
+  if (agentList.length > 0) {
+    activeSession = agentList[0].sessionId
+    selectSession(activeSession, true)
+  } else {
+    activeSession = null
+  }
 
   // Update sidebar highlights
   agentListEl.querySelectorAll('.agent-item').forEach(el => {
     el.classList.toggle('active', el.dataset.id === id)
   })
 
-  // Update tab highlights
-  updateAllTabsActiveState()
-
+  renderTabs()
   updateHeader()
   updateHeaderButtons()
   updatePreviewContent()
+}
+
+function selectSession(sessionId, skipRender) {
+  if (!sessionId) return
+  const [projectId] = sessionId.split(':')
+  const p = projects[projectId]
+  if (!p) return
+  const agent = p.agents[sessionId]
+  if (!agent) return
+
+  // Deactivate previous terminal
+  const prevAgent = getActiveAgent()
+  if (prevAgent?.terminal) {
+    prevAgent.terminal.div.classList.remove('active')
+  }
+
+  activeProject = projectId
+  activeSession = sessionId
 
   // Create terminal if needed
-  if (!p.terminal) createTerminal(id)
-  p.terminal.div.classList.add('active')
+  if (!agent.terminal) createTerminal(sessionId)
+  agent.terminal.div.classList.add('active')
+
+  if (!skipRender) {
+    updateAllTabsActiveState()
+    updateHeader()
+    updateHeaderButtons()
+  }
 
   requestAnimationFrame(() => {
-    if (!p.terminal) return
-    const atBottom = p.terminal.term.buffer.active.viewportY >= p.terminal.term.buffer.active.baseY
-    p.terminal.fitAddon.fit()
-    if (atBottom) p.terminal.term.scrollToBottom()
+    if (!agent.terminal) return
+    const atBottom = agent.terminal.term.buffer.active.viewportY >= agent.terminal.term.buffer.active.baseY
+    agent.terminal.fitAddon.fit()
+    if (atBottom) agent.terminal.term.scrollToBottom()
   })
+}
+
+async function spawnNewAgent(projectId) {
+  try {
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/agents`, { method: 'POST' })
+    const data = await res.json()
+    if (data.sessionId) {
+      // The control WS will broadcast the update; select the new agent
+      setTimeout(() => selectSession(data.sessionId), 200)
+    }
+  } catch (err) {
+    console.error('Failed to spawn agent:', err)
+  }
+}
+
+async function removeAgentInstance(sessionId) {
+  try {
+    await fetch(`${baseUrl}/api/agents/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+  } catch (err) {
+    console.error('Failed to remove agent:', err)
+  }
 }
 
 function updateHeader() {
   const p = projects[activeProject]
   if (!p) return
+  const agent = getActiveAgent()
 
   headerColorBar.style.background = p.color
   headerDot.style.background = p.color
-  headerDot.classList.toggle('thinking', p.running && p.active)
-  headerDot.classList.toggle('waiting', p.running && !p.active && p.waiting)
-  headerName.textContent = p.name
+  const running = agent?.running ?? false
+  const active = agent?.active ?? false
+  const waiting = agent?.waiting ?? false
+  headerDot.classList.toggle('thinking', running && active)
+  headerDot.classList.toggle('waiting', running && !active && waiting)
+
+  const agentCount = Object.keys(p.agents).length
+  const agentLabel = agentCount > 1 && agent ? ` — Agent ${agent.instanceIdx + 1}` : ''
+  headerName.textContent = p.name + agentLabel
   document.documentElement.style.setProperty('--active-color', p.color)
-  updateHeaderStatus(p)
+  updateHeaderStatus(agent)
 
   if (p.ports.length > 0) {
     headerPort.textContent = p.ports.map(port => `:${port}`).join(' ')
@@ -755,15 +1040,15 @@ function updateHeader() {
   }
 }
 
-function updateHeaderStatus(p) {
-  if (!p) { headerStatus.textContent = ''; headerStatus.className = ''; return }
-  if (p.running && p.active) {
+function updateHeaderStatus(agent) {
+  if (!agent) { headerStatus.textContent = ''; headerStatus.className = ''; return }
+  if (agent.running && agent.active) {
     headerStatus.textContent = 'Thinking...'
     headerStatus.className = 'header-status thinking'
-  } else if (p.running && p.waiting) {
+  } else if (agent.running && agent.waiting) {
     headerStatus.textContent = 'Waiting for input'
     headerStatus.className = 'header-status waiting'
-  } else if (p.running) {
+  } else if (agent.running) {
     headerStatus.textContent = 'Idle'
     headerStatus.className = 'header-status idle'
   } else {
@@ -774,9 +1059,12 @@ function updateHeaderStatus(p) {
 
 // ── Terminal creation ────────────────────────────────────────────────────────
 
-function createTerminal(id) {
-  const p = projects[id]
+function createTerminal(sessionId) {
+  const [projectId] = sessionId.split(':')
+  const p = projects[projectId]
   if (!p) return
+  const agent = p.agents[sessionId]
+  if (!agent) return
 
   if (typeof Terminal === 'undefined') {
     console.error('xterm.js failed to load from CDN')
@@ -785,7 +1073,7 @@ function createTerminal(id) {
 
   const div = document.createElement('div')
   div.className = 'terminal-instance active'
-  div.dataset.project = id
+  div.dataset.session = sessionId
   termContainer.appendChild(div)
 
   const term = new Terminal({
@@ -839,49 +1127,55 @@ function createTerminal(id) {
   })
   resizeObserver.observe(termContainer)
 
-  p.terminal = { term, fitAddon, searchAddon, div, ws: wsRef, resizeObserver }
-  if (!p.running) div.classList.add('stopped')
-  connectProjectWS(id, term, wsRef)
+  agent.terminal = { term, fitAddon, searchAddon, div, ws: wsRef, resizeObserver }
+  if (!agent.running) div.classList.add('stopped')
+  connectAgentWS(sessionId, term, wsRef)
 }
 
-// ── WebSocket (project terminal) ─────────────────────────────────────────────
+// ── WebSocket (agent terminal) ───────────────────────────────────────────────
 
-function connectProjectWS(id, term, wsRef, skipBuffer = false) {
-  const wsUrl = `${wsBase}/ws?project=${id}&skipBuffer=${skipBuffer}`
+function connectAgentWS(sessionId, term, wsRef, skipBuffer = false) {
+  const wsUrl = `${wsBase}/ws?session=${encodeURIComponent(sessionId)}&skipBuffer=${skipBuffer}`
   const ws = new WebSocket(wsUrl)
   wsRef.current = ws
 
+  const [projectId] = sessionId.split(':')
+
   ws.addEventListener('message', (e) => {
-    const p = projects[id]
+    const p = projects[projectId]
     if (!p) return
+    const agent = p.agents[sessionId]
+    if (!agent) return
     try {
       const msg = JSON.parse(e.data)
       if (msg.type === 'output') {
         term.write(msg.data)
       } else if (msg.type === 'status') {
-        const wasRunning = p.running
-        p.running = msg.running
-        updateSidebarItem(id)
-        if (id === activeProject) { updateHeaderButtons(); updateHeaderStatus(p) }
+        const wasRunning = agent.running
+        agent.running = msg.running
+        updateSidebarItem(projectId)
+        renderTabs()
+        if (sessionId === activeSession) { updateHeaderButtons(); updateHeaderStatus(agent) }
         if (wasRunning && !msg.running) {
-          maybeNotify(id, `${p.name} stopped`, 'Agent session ended')
+          maybeNotify(projectId, `${p.name} stopped`, 'Agent session ended')
         }
       } else if (msg.type === 'activity') {
-        const wasActive = p.active
-        p.active = msg.active
-        p.waiting = msg.waiting ?? false
-        updateSidebarItem(id)
+        const wasActive = agent.active
+        agent.active = msg.active
+        agent.waiting = msg.waiting ?? false
+        updateSidebarItem(projectId)
         updateTabAttention()
-        if (id === activeProject) {
+        renderTabs()
+        if (sessionId === activeSession) {
           headerDot.classList.toggle('thinking', msg.active)
           headerDot.classList.toggle('waiting', !msg.active && (msg.waiting ?? false))
-          updateHeaderStatus(p)
+          updateHeaderStatus(agent)
         }
-        if (wasActive && !msg.active && p.running) {
+        if (wasActive && !msg.active && agent.running) {
           if (msg.waiting) {
-            maybeNotify(id, `${p.name} needs input`, 'Waiting for your response')
+            maybeNotify(projectId, `${p.name} needs input`, 'Waiting for your response')
           } else {
-            maybeNotify(id, `${p.name} finished`, 'Claude is done responding')
+            maybeNotify(projectId, `${p.name} finished`, 'Claude is done responding')
           }
         }
       }
@@ -895,8 +1189,9 @@ function connectProjectWS(id, term, wsRef, skipBuffer = false) {
   ws.addEventListener('close', () => {
     term.write('\r\n\x1b[90m[disconnected — reconnecting...]\x1b[0m\r\n')
     setTimeout(() => {
-      if (!projects[id]?.terminal) return
-      connectProjectWS(id, term, wsRef, true)
+      const p = projects[projectId]
+      if (!p?.agents[sessionId]?.terminal) return
+      connectAgentWS(sessionId, term, wsRef, true)
     }, 3000)
   })
 }
@@ -904,17 +1199,17 @@ function connectProjectWS(id, term, wsRef, skipBuffer = false) {
 // ── Header buttons ───────────────────────────────────────────────────────────
 
 function updateHeaderButtons() {
-  const p = projects[activeProject]
-  if (!p) return
-  btnStart.style.opacity = p.running ? '0.4' : '1'
-  btnStop.style.opacity  = p.running ? '1'   : '0.4'
+  const agent = getActiveAgent()
+  const running = agent?.running ?? false
+  btnStart.style.opacity = running ? '0.4' : '1'
+  btnStop.style.opacity  = running ? '1'   : '0.4'
 }
 
-async function projectAction(endpoint) {
-  const p = projects[activeProject]
-  if (!p) return
+async function agentAction(endpoint) {
+  const agent = getActiveAgent()
+  if (!agent) return
   try {
-    const res = await fetch(`${baseUrl}/api/projects/${p.id}/${endpoint}`, { method: 'POST' })
+    const res = await fetch(`${baseUrl}/api/agents/${encodeURIComponent(agent.sessionId)}/${endpoint}`, { method: 'POST' })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       console.error(`${endpoint} failed:`, data.error ?? res.statusText)
@@ -924,8 +1219,13 @@ async function projectAction(endpoint) {
   }
 }
 
-btnStart.addEventListener('click', () => projectAction('start'))
-btnStop.addEventListener('click', () => projectAction('stop'))
+btnStart.addEventListener('click', () => {
+  if (activeProject) {
+    // Start or spawn agent instance 0 for the active project
+    fetch(`${baseUrl}/api/projects/${activeProject}/start`, { method: 'POST' })
+  }
+})
+btnStop.addEventListener('click', () => agentAction('stop'))
 
 btnStartAll.addEventListener('click', async () => {
   for (const id of projectOrder) {
@@ -946,27 +1246,27 @@ btnStopAll.addEventListener('click', async () => {
 // ── Clear terminal ───────────────────────────────────────────────────────────
 
 btnClear.addEventListener('click', () => {
-  const p = projects[activeProject]
-  if (!p?.terminal) return
-  p.terminal.term.clear()
-  if (p.terminal.ws.current?.readyState === WebSocket.OPEN) {
-    p.terminal.ws.current.send(JSON.stringify({ type: 'clear' }))
+  const agent = getActiveAgent()
+  if (!agent?.terminal) return
+  agent.terminal.term.clear()
+  if (agent.terminal.ws.current?.readyState === WebSocket.OPEN) {
+    agent.terminal.ws.current.send(JSON.stringify({ type: 'clear' }))
   }
 })
 
 // ── Restart ──────────────────────────────────────────────────────────────────
 
 btnRestart.addEventListener('click', async () => {
-  const p = projects[activeProject]
-  if (!p) return
+  const agent = getActiveAgent()
+  if (!agent) return
   const origHTML = btnRestart.innerHTML
   btnRestart.disabled = true
   btnRestart.innerHTML = '<span style="font-size:11px">...</span>'
 
-  if (p.terminal) p.terminal.term.clear()
+  if (agent.terminal) agent.terminal.term.clear()
 
   try {
-    await fetch(`${baseUrl}/api/projects/${p.id}/restart`, { method: 'POST' })
+    await fetch(`${baseUrl}/api/agents/${encodeURIComponent(agent.sessionId)}/restart`, { method: 'POST' })
   } catch (err) {
     console.error('Restart failed:', err)
   } finally {
@@ -989,10 +1289,10 @@ shortcutsModal.addEventListener('click', (e) => {
 // ── Terminal search bar ──────────────────────────────────────────────────────
 
 function openSearchBar() {
-  const p = projects[activeProject]
-  if (!p?.terminal?.searchAddon) return
+  const agent = getActiveAgent()
+  if (!agent?.terminal?.searchAddon) return
 
-  const t = p.terminal
+  const t = agent.terminal
   if (t.div.querySelector('.search-bar')) {
     t.div.querySelector('.search-input').focus()
     return
@@ -1034,14 +1334,14 @@ function openSearchBar() {
 }
 
 function closeSearchBar() {
-  const p = projects[activeProject]
-  if (!p?.terminal) return
-  const bar = p.terminal.div.querySelector('.search-bar')
+  const agent = getActiveAgent()
+  if (!agent?.terminal) return
+  const bar = agent.terminal.div.querySelector('.search-bar')
   if (bar) {
-    if (p.terminal.searchAddon) p.terminal.searchAddon.clearDecorations()
+    if (agent.terminal.searchAddon) agent.terminal.searchAddon.clearDecorations()
     bar.remove()
   }
-  p.terminal.term.focus()
+  agent.terminal.term.focus()
 }
 
 // ── Permissions modal ────────────────────────────────────────────────────────
@@ -1187,9 +1487,9 @@ function togglePreview(forceState) {
   updatePreviewContent()
 
   requestAnimationFrame(() => {
-    const p = projects[activeProject]
-    if (p?.terminal) {
-      p.terminal.fitAddon.fit()
+    const agent = getActiveAgent()
+    if (agent?.terminal) {
+      agent.terminal.fitAddon.fit()
     }
   })
 }
@@ -1273,9 +1573,9 @@ previewReload.addEventListener('click', reloadPreview)
     savePreviewState()
 
     requestAnimationFrame(() => {
-      const p = projects[activeProject]
-      if (p?.terminal) {
-        p.terminal.fitAddon.fit()
+      const agent = getActiveAgent()
+      if (agent?.terminal) {
+        agent.terminal.fitAddon.fit()
       }
     })
   }
@@ -1321,13 +1621,20 @@ document.addEventListener('keydown', (e) => {
     return
   }
 
-  // Alt+1-9 switch projects
+  // Alt+1-9 switch top-level projects
   if (e.altKey && !e.ctrlKey && !e.metaKey) {
     const idx = parseInt(e.key, 10) - 1
-    const id = projectOrder[idx]
-    if (id && projects[id]) {
-      e.preventDefault()
-      selectProject(id)
+    if (idx >= 0) {
+      // Get top-level projects with running agents (matching tier 1)
+      const topLevel = projectOrder.filter(id => {
+        const p = projects[id]
+        return p && !p.groupId && hasRunningAgent(id)
+      })
+      const id = topLevel[idx]
+      if (id) {
+        e.preventDefault()
+        selectTier1(id)
+      }
     }
   }
 })

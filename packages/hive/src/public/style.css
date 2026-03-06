@@ -661,33 +661,101 @@ html, body {
 }
 .action-btn--help:hover { border-color: var(--muted); color: var(--text); }
 
-/* ── Agent tabs ── */
+/* ── Tab tiers ── */
 
-#running-tabs,
-#agent-tabs {
+#tab-tiers {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-tier {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 0 8px;
-  height: 36px;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
-  background: var(--sidebar-bg);
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
 }
 
-#running-tabs::-webkit-scrollbar,
-#agent-tabs::-webkit-scrollbar { display: none; }
+.tab-tier::-webkit-scrollbar { display: none; }
+.tab-tier:empty { display: none; }
 
-#running-tabs:empty,
-#agent-tabs:empty {
-  display: none;
+/* Tier 1: Project/monorepo root tabs - most prominent */
+.tier-project {
+  height: 36px;
+  padding: 0 8px;
+  background: var(--sidebar-bg);
+  border-bottom: 1px solid var(--border);
 }
+
+/* Tier 2: Package tabs (monorepo) or agent tabs (standalone) */
+.tier-package {
+  height: 32px;
+  padding: 0 8px 0 16px;
+  background: color-mix(in srgb, var(--sidebar-bg) 60%, var(--bg));
+  border-bottom: 1px solid var(--border);
+}
+
+/* Tier 3: Agent instance tabs within a monorepo package */
+.tier-agent {
+  height: 28px;
+  padding: 0 8px 0 24px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.tier-package .agent-tab-name { font-size: 11.5px; }
+.tier-agent .agent-tab-name { font-size: 11px; }
 
 .agent-tab.dimmed {
   opacity: 0.4;
+}
+
+/* "+" button for new agent instances */
+.agent-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.agent-add-btn:hover {
+  color: var(--green);
+  border-color: var(--green);
+  background: color-mix(in srgb, var(--green, #4ade80) 8%, transparent);
+}
+
+/* Close button on agent instance tabs */
+.agent-tab-close {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--muted);
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+.agent-instance-tab:hover .agent-tab-close {
+  display: flex;
+}
+.agent-tab-close:hover {
+  color: var(--red, #f87171);
+  background: color-mix(in srgb, var(--red, #f87171) 12%, transparent);
 }
 
 .agent-tab {
